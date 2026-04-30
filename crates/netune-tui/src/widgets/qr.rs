@@ -105,46 +105,41 @@ mod tests {
     use ratatui::layout::Rect;
 
     #[test]
-    fn test_qr_rendering() {
-        let widget = QrCodeWidget::new("https://example.com");
+    fn test_qr_renders_complete() {
+        let widget = QrCodeWidget::new("https://music.163.com/login?codekey=testkey123");
         let area = Rect::new(0, 0, 40, 20);
         let mut buf = TuiBuffer::empty(area);
 
         widget.render(area, &mut buf);
 
-        // Verify that some cells have dark block characters.
-        let has_dark = (0..area.height).any(|y| {
+        // QR 码渲染后应包含非空内容（即至少有一些非空格字符）
+        let has_content = (0..area.height).any(|y| {
             (0..area.width).any(|x| {
                 buf.cell((x, y))
                     .is_some_and(|c| matches!(c.symbol(), "█" | "▀" | "▄"))
             })
         });
-        assert!(has_dark, "QR code should contain dark modules");
-
-        // Verify that some cells have the space character (light modules).
-        let has_light = (0..area.height).any(|y| {
-            (0..area.width).any(|x| {
-                buf.cell((x, y))
-                    .is_some_and(|c| c.symbol() == " ")
-            })
-        });
-        assert!(has_light, "QR code should contain light modules");
+        assert!(has_content, "QR code should render non-empty content");
     }
 
     #[test]
-    fn test_qr_quiet_zone() {
-        let widget = QrCodeWidget::new("https://example.com");
+    fn test_qr_has_quiet_zone() {
+        let widget = QrCodeWidget::new("https://music.163.com/login?codekey=testkey123");
         let area = Rect::new(0, 0, 50, 25);
         let mut buf = TuiBuffer::empty(area);
 
         widget.render(area, &mut buf);
 
-        let corner = buf.cell((0, 0)).unwrap();
-        assert_eq!(
-            corner.symbol(),
-            " ",
-            "Corner cells should be light (quiet zone or outside QR)"
-        );
+        // 四角应为空白（安静区），验证 quiet zone 存在
+        let corners = [(0, 0), (area.width - 1, 0), (0, area.height - 1), (area.width - 1, area.height - 1)];
+        for (x, y) in corners {
+            let cell = buf.cell((x, y)).unwrap();
+            assert_eq!(
+                cell.symbol(),
+                " ",
+                "Corner ({x}, {y}) should be light (quiet zone)"
+            );
+        }
     }
 
     #[test]
