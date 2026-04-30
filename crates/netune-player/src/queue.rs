@@ -208,9 +208,242 @@ impl Iterator for PlayQueue {
 
     /// Returns the current song (cloned) and advances to the next one.
     /// The advancement respects the current play mode.
+    /// Returns `None` when the queue is exhausted (e.g. Sequential mode at
+    /// the end of the queue).
     fn next(&mut self) -> Option<Self::Item> {
+        let idx = self.current;
         let song = self.current().cloned()?;
         PlayQueue::advance(self);
+        // In Sequential mode, advance() is a no-op at the last song.
+        // Detect this so the iterator terminates.
+        if self.mode == PlayMode::Sequential && self.current == idx {
+            self.current = self.songs.len(); // mark exhausted
+            return Some(song);
+        }
         Some(song)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use netune_core::models::{Album, Artist, QualityLevel, Song};
+
+    /// Helper to build a test song with a given id and name.
+    fn make_song(id: u64, name: &str) -> Song {
+        Song {
+            id,
+            name: name.to_string(),
+            artists: vec![Artist {
+                id: 1,
+                name: "Test Artist".to_string(),
+            }],
+            album: Album {
+                id: 1,
+                name: "Test Album".to_string(),
+                cover_url: None,
+            },
+            duration: 180_000,
+            quality: QualityLevel::Standard,
+        }
+    }
+
+    /// Helper: create a queue pre-loaded with 3 songs.
+    fn queue_with_three() -> PlayQueue {
+        let mut q = PlayQueue::new();
+        q.push(make_song(1, "Song A"));
+        q.push(make_song(2, "Song B"));
+        q.push(make_song(3, "Song C"));
+        q
+    }
+
+    #[test]
+    fn test_queue_push_and_current() {
+        let mut q = PlayQueue::new();
+        assert!(q.current().is_none());
+
+        q.push(make_song(1, "Song A"));
+        assert_eq!(q.current().unwrap().name, "Song A");
+
+        q.push(make_song(2, "Song B"));
+        // current still points to the first song after push
+        assert_eq!(q.current().unwrap().name, "Song A");
+        assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn test_queue_advance_sequential() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Sequential);
+
+        assert_eq!(q.advance().unwrap().name, "Song B");
+        assert_eq!(q.advance().unwrap().name, "Song C");
+        // At the end — should stay on the last song.
+        assert_eq!(q.advance().unwrap().name, "Song C");
+        assert_eq!(q.current_index(), 2);
+    }
+
+    #[test]
+    fn test_queue_advance_loop_all() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopAll);
+
+        assert_eq!(q.advance().unwrap().name, "Song B");
+        assert_eq!(q.advance().unwrap().name, "Song C");
+        // Wraps around to the beginning.
+        assert_eq!(q.advance().unwrap().name, "Song A");
+        assert_eq!(q.current_index(), 0);
+    }
+
+    #[test]
+    fn test_queue_advance_loop_one() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopOne);
+
+        assert_eq!(q.advance().unwrap().name, "Song A");
+        assert_eq!(q.advance().unwrap().name, "Song A");
+        assert_eq!(q.advance().unwrap().name, "Song A");
+        assert_eq!(q.current_index(), 0);
+    }
+
+    #[test]
+    fn test_queue_prev() {
+        let mut q = queue_with_three();
+
+        // advance twice → Song C
+        q.advance(); // B
+        q.advance(); // C
+        assert_eq!(q.current().unwrap().name, "Song C");
+
+        // prev uses history → back to B
+        assert_eq!(q.prev().unwrap().name, "Song B");
+        // prev again → back to A
+        assert_eq!(q.prev().unwrap().name, "Song A");
+        // prev at beginning → stays on A (no more history, index 0)
+        assert_eq!(q.prev().unwrap().name, "Song A");
+    }
+
+    #[test]
+    fn test_queue_remove() {
+        let mut q = queue_with_three();
+        // Remove middle song.
+        let removed = q.remove(1).unwrap();
+        assert_eq!(removed.name, "Song B");
+        assert_eq!(q.len(), 2);
+        // Current is still index 0 → Song A.
+        assert_eq!(q.current().unwrap().name, "Song A");
+
+        // Advance → should go to Song C (the remaining song at index 1).
+        assert_eq!(q.advance().unwrap().name, "Song C");
+
+        // Remove out-of-bounds returns None.
+        assert!(q.remove(99).is_none());
+    }
+
+    #[test]
+    fn test_queue_remove_current_adjusts() {
+        let mut q = queue_with_three();
+        q.advance(); // now at index 1 (Song B)
+
+        // Remove current song (index 1). Current song was Song B,
+        // after removal Song C shifts to index 1.
+        let removed = q.remove(1).unwrap();
+        assert_eq!(removed.name, "Song B");
+        assert_eq!(q.current().unwrap().name, "Song C");
+    }
+
+    #[test]
+    fn test_queue_shuffle() {
+        let mut q = PlayQueue::new();
+        for i in 0..10 {
+            q.push(make_song(i, &format!("Song {i}")));
+        }
+        let original_names: Vec<String> = q.songs().iter().map(|s| s.name.clone()).collect();
+
+        q.shuffle();
+
+        // Current song should remain the same (Song 0).
+        assert_eq!(q.current().unwrap().name, "Song 0");
+        // Queue length unchanged.
+        assert_eq!(q.len(), 10);
+        // All songs still present (order may differ).
+        let mut shuffled_names: Vec<String> = q.songs().iter().map(|s| s.name.clone()).collect();
+        let mut sorted_orig = original_names.clone();
+        sorted_orig.sort();
+        shuffled_names.sort();
+        assert_eq!(sorted_orig, shuffled_names);
+    }
+
+    #[test]
+    fn test_queue_empty() {
+        let mut q = PlayQueue::new();
+        assert!(q.is_empty());
+        assert_eq!(q.len(), 0);
+        assert!(q.current().is_none());
+        assert!(q.advance().is_none());
+        assert!(q.prev().is_none());
+        assert!(q.remove(0).is_none());
+    }
+
+    #[test]
+    fn test_queue_iterator() {
+        let mut q = PlayQueue::new();
+        q.push(make_song(1, "Song A"));
+        q.push(make_song(2, "Song B"));
+        q.push(make_song(3, "Song C"));
+        // Sequential mode: iterator yields each song then advances.
+        let collected: Vec<String> = q.by_ref().map(|s| s.name).collect();
+        assert_eq!(collected, vec!["Song A", "Song B", "Song C"]);
+    }
+
+    #[test]
+    fn test_queue_iterator_loop_all_yields_forever() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopAll);
+
+        // Take 6 items — should cycle through twice.
+        let names: Vec<String> = q.by_ref().take(6).map(|s| s.name).collect();
+        assert_eq!(
+            names,
+            vec!["Song A", "Song B", "Song C", "Song A", "Song B", "Song C"]
+        );
+    }
+
+    #[test]
+    fn test_queue_cycle_mode() {
+        let mut q = PlayQueue::new();
+        assert_eq!(q.mode(), PlayMode::Sequential);
+        q.cycle_mode();
+        assert_eq!(q.mode(), PlayMode::LoopAll);
+        q.cycle_mode();
+        assert_eq!(q.mode(), PlayMode::LoopOne);
+        q.cycle_mode();
+        assert_eq!(q.mode(), PlayMode::Shuffle);
+        q.cycle_mode();
+        assert_eq!(q.mode(), PlayMode::Sequential);
+    }
+
+    #[test]
+    fn test_queue_jump() {
+        let mut q = queue_with_three();
+        let song = q.jump(2).unwrap();
+        assert_eq!(song.name, "Song C");
+        assert_eq!(q.current_index(), 2);
+
+        // jump out of bounds
+        assert!(q.jump(99).is_none());
+    }
+
+    #[test]
+    fn test_queue_load() {
+        let mut q = queue_with_three();
+        q.advance(); // move to index 1
+
+        let new_songs = vec![make_song(10, "New A"), make_song(11, "New B")];
+        q.load(new_songs);
+
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.current().unwrap().name, "New A");
+        assert_eq!(q.current_index(), 0);
     }
 }

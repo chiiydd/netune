@@ -534,3 +534,58 @@ fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
     }
     lines
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_creation() {
+        let client = NeteaseApiClient::new();
+        // Verify the client is created with default state
+        assert!(matches!(client.login_state(), LoginState::LoggedOut));
+    }
+
+    #[test]
+    fn test_track_to_song() {
+        let track = ApiTrack {
+            id: 42,
+            name: "My Song".to_string(),
+            ar: vec![
+                ApiArtist { id: 1, name: "Singer A".to_string() },
+                ApiArtist { id: 2, name: "Singer B".to_string() },
+            ],
+            al: Some(ApiAlbum {
+                id: 99,
+                name: "Great Album".to_string(),
+                pic_url: Some("https://example.com/pic.jpg".to_string()),
+            }),
+            dt: 300_000,
+        };
+        let song = NeteaseApiClient::track_to_song(track);
+        assert_eq!(song.id, 42);
+        assert_eq!(song.name, "My Song");
+        assert_eq!(song.artists.len(), 2);
+        assert_eq!(song.artists[0].name, "Singer A");
+        assert_eq!(song.album.id, 99);
+        assert_eq!(song.album.name, "Great Album");
+        assert_eq!(song.album.cover_url.as_deref(), Some("https://example.com/pic.jpg"));
+        assert_eq!(song.duration, 300_000);
+    }
+
+    #[test]
+    fn test_track_to_song_no_album() {
+        let track = ApiTrack {
+            id: 1,
+            name: "No Album Track".to_string(),
+            ar: vec![],
+            al: None,
+            dt: 0,
+        };
+        let song = NeteaseApiClient::track_to_song(track);
+        assert_eq!(song.album.id, 0);
+        assert_eq!(song.album.name, "");
+        assert!(song.album.cover_url.is_none());
+        assert!(song.artists.is_empty());
+    }
+}

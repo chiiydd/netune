@@ -62,3 +62,61 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::QualityLevel;
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.quality, QualityLevel::ExHigh);
+        assert!((config.volume - 0.7).abs() < f32::EPSILON);
+        assert!(config.show_translation);
+    }
+
+    #[test]
+    fn test_config_toml_roundtrip() {
+        let config = Config {
+            quality: QualityLevel::Lossless,
+            volume: 0.5,
+            show_translation: false,
+        };
+        let toml_str = toml::to_string_pretty(&config).expect("serialize toml");
+        let back: Config = toml::from_str(&toml_str).expect("deserialize toml");
+        assert_eq!(back.quality, QualityLevel::Lossless);
+        assert!((back.volume - 0.5).abs() < f32::EPSILON);
+        assert!(!back.show_translation);
+    }
+
+    #[test]
+    fn test_config_json_roundtrip() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).expect("serialize json");
+        let back: Config = serde_json::from_str(&json).expect("deserialize json");
+        assert_eq!(back.quality, config.quality);
+        assert!((back.volume - config.volume).abs() < f32::EPSILON);
+        assert_eq!(back.show_translation, config.show_translation);
+    }
+
+    #[test]
+    fn test_config_different_qualities() {
+        for quality in [
+            QualityLevel::Standard,
+            QualityLevel::Higher,
+            QualityLevel::ExHigh,
+            QualityLevel::Lossless,
+            QualityLevel::HiRes,
+        ] {
+            let config = Config {
+                quality,
+                volume: 1.0,
+                show_translation: true,
+            };
+            let toml_str = toml::to_string_pretty(&config).unwrap();
+            let back: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(back.quality, quality);
+        }
+    }
+}

@@ -164,3 +164,123 @@ pub struct ApiPersonalFmResponse {
     #[serde(default)]
     pub data: Vec<ApiTrack>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_api_profile_deserialization() {
+        let json = r#"{
+            "userId": 12345,
+            "nickname": "test_user",
+            "avatarUrl": "https://example.com/avatar.jpg"
+        }"#;
+        let profile: ApiProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.user_id, 12345);
+        assert_eq!(profile.nickname, "test_user");
+        assert_eq!(
+            profile.avatar_url.as_deref(),
+            Some("https://example.com/avatar.jpg")
+        );
+    }
+
+    #[test]
+    fn test_api_track_to_song() {
+        let json = r#"{
+            "id": 456,
+            "name": "Test Song",
+            "ar": [
+                {"id": 1, "name": "Artist A"},
+                {"id": 2, "name": "Artist B"}
+            ],
+            "al": {
+                "id": 10,
+                "name": "Test Album",
+                "picUrl": "https://example.com/cover.jpg"
+            },
+            "dt": 240000
+        }"#;
+        let track: ApiTrack = serde_json::from_str(json).unwrap();
+        assert_eq!(track.id, 456);
+        assert_eq!(track.name, "Test Song");
+        assert_eq!(track.ar.len(), 2);
+        assert_eq!(track.ar[0].name, "Artist A");
+        let album = track.al.as_ref().unwrap();
+        assert_eq!(album.name, "Test Album");
+        assert_eq!(track.dt, 240000);
+    }
+
+    #[test]
+    fn test_api_search_response() {
+        let json = r#"{
+            "code": 200,
+            "result": {
+                "songs": [
+                    {
+                        "id": 789,
+                        "name": "Found Song",
+                        "ar": [{"id": 3, "name": "Singer"}],
+                        "al": {"id": 20, "name": "Hits", "picUrl": null},
+                        "dt": 180000
+                    }
+                ],
+                "songCount": 1
+            }
+        }"#;
+        let resp: ApiSearchResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.code, 200);
+        let result = resp.result.unwrap();
+        assert_eq!(result.song_count, 1);
+        assert_eq!(result.songs.len(), 1);
+        assert_eq!(result.songs[0].name, "Found Song");
+    }
+
+    #[test]
+    fn test_api_song_url_response() {
+        let json = r#"{
+            "code": 200,
+            "data": [
+                {
+                    "id": 123,
+                    "url": "https://m10.music.126.net/song.mp3",
+                    "br": 320000,
+                    "fee": 0
+                },
+                {
+                    "id": 456,
+                    "url": null,
+                    "br": null,
+                    "fee": 1
+                }
+            ]
+        }"#;
+        let resp: ApiSongUrlResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.code, 200);
+        assert_eq!(resp.data.len(), 2);
+        assert_eq!(resp.data[0].id, 123);
+        assert!(resp.data[0].url.is_some());
+        assert_eq!(resp.data[0].br, Some(320000));
+        assert_eq!(resp.data[1].fee, 1);
+        assert!(resp.data[1].url.is_none());
+    }
+
+    #[test]
+    fn test_api_lyric_response() {
+        let json = r#"{
+            "code": 200,
+            "lrc": {
+                "lyric": "[00:00.00]Hello World\n[00:05.30]Second line"
+            },
+            "tlyric": {
+                "lyric": "[00:00.00]你好世界\n[00:05.30]第二行"
+            }
+        }"#;
+        let resp: ApiLyricResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.code, 200);
+        let lrc = resp.lrc.unwrap();
+        assert!(lrc.lyric.contains("Hello World"));
+        let tlyric = resp.tlyric.unwrap();
+        assert!(tlyric.lyric.contains("你好世界"));
+    }
+}

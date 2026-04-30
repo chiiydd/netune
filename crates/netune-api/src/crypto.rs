@@ -130,4 +130,43 @@ mod tests {
         let decrypted = aes_ecb_decrypt(&encrypted, key).unwrap();
         assert_eq!(data.to_vec(), decrypted);
     }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        let data = r#"{"username":"test","password":"pass123"}"#;
+        let encrypted = encrypt_linuxapi(data).unwrap();
+        // base64 decode → AES decrypt → original plaintext
+        let encrypted_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encrypted)
+            .unwrap();
+        let decrypted_bytes = aes_ecb_decrypt(&encrypted_bytes, LINUXAPI_KEY).unwrap();
+        let decrypted = String::from_utf8(decrypted_bytes).unwrap();
+        assert_eq!(decrypted, data);
+    }
+
+    #[test]
+    fn test_encrypt_eapi_with_empty_params() {
+        let result = encrypt_eapi("", "/api/test");
+        assert!(result.is_ok());
+        let encrypted = result.unwrap();
+        assert!(!encrypted.is_empty());
+        // Should be valid hex (uppercase)
+        assert!(encrypted.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_hex_digest_consistency() {
+        use md5::Digest;
+        let input = "test input data for md5";
+        let mut hasher1 = md5::Md5::new();
+        hasher1.update(input.as_bytes());
+        let digest1 = hex::encode(hasher1.finalize());
+
+        let mut hasher2 = md5::Md5::new();
+        hasher2.update(input.as_bytes());
+        let digest2 = hex::encode(hasher2.finalize());
+
+        assert_eq!(digest1, digest2);
+        assert_eq!(digest1.len(), 32); // MD5 = 128 bits = 32 hex chars
+    }
 }
