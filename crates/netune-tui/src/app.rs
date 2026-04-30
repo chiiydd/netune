@@ -156,9 +156,10 @@ impl App {
             Ok(playlists) => {
                 tracing::info!(count = playlists.len(), "Fetched user playlists");
                 for page in &mut self.page_stack {
-                    if let Page::Playlist(pp) = page {
-                        pp.set_playlists(playlists.clone());
-                        break;
+                    match page {
+                        Page::Playlist(pp) => pp.set_playlists(playlists.clone()),
+                        Page::Home(hp) => hp.set_playlists(playlists.clone()),
+                        _ => {}
                     }
                 }
             }
@@ -322,10 +323,14 @@ impl App {
                     Ok(Some(profile)) => {
                         tracing::info!(nickname = %profile.nickname, uid = profile.uid, "QR login succeeded");
                         lp.set_success();
-                        self.user = Some(profile);
-                        // Navigate to home after short delay.
+                        self.user = Some(profile.clone());
+                        // Navigate to home and update user info.
                         self.page_stack.clear();
-                        self.page_stack.push(Page::home());
+                        let mut home = crate::pages::home::HomePage::new();
+                        home.set_user(Some(profile));
+                        self.page_stack.push(Page::Home(home));
+                        // Fetch playlists in background.
+                        self.fetch_user_playlists().await;
                     }
                     Ok(None) => {
                         // Still waiting — state is managed by the tick logic.

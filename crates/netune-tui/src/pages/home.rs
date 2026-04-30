@@ -10,6 +10,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
+use netune_core::models::{Playlist, UserProfile};
+
 use crate::chrome::KeyHint;
 use crate::theme::Theme;
 
@@ -30,50 +32,15 @@ enum MenuAction {
     DailyRecommend,
     PersonalFm,
     Login,
+    Logout,
     Settings,
     Quit,
 }
 
-const MENU_ITEMS: &[MenuItem] = &[
-    MenuItem {
-        label: "My Playlists",
-        desc: "Browse your playlists and collections",
-        action: MenuAction::Playlists,
-    },
-    MenuItem {
-        label: "Search",
-        desc: "Search for songs, albums, and artists",
-        action: MenuAction::Search,
-    },
-    MenuItem {
-        label: "Daily Recommend",
-        desc: "Personalized daily mix for you",
-        action: MenuAction::DailyRecommend,
-    },
-    MenuItem {
-        label: "Personal FM",
-        desc: "Endless radio tailored to your taste",
-        action: MenuAction::PersonalFm,
-    },
-    MenuItem {
-        label: "Login",
-        desc: "Sign in to your Netease account",
-        action: MenuAction::Login,
-    },
-    MenuItem {
-        label: "Settings",
-        desc: "App preferences and configuration",
-        action: MenuAction::Settings,
-    },
-    MenuItem {
-        label: "Quit",
-        desc: "Exit netune",
-        action: MenuAction::Quit,
-    },
-];
-
 pub struct HomePage {
     list_state: ListState,
+    user: Option<UserProfile>,
+    playlists: Vec<Playlist>,
 }
 
 impl Default for HomePage {
@@ -86,19 +53,96 @@ impl HomePage {
     pub fn new() -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        Self { list_state }
+        Self {
+            list_state,
+            user: None,
+            playlists: Vec::new(),
+        }
+    }
+
+    pub fn set_user(&mut self, user: Option<UserProfile>) {
+        self.user = user;
+        self.list_state.select(Some(0));
+    }
+
+    pub fn set_playlists(&mut self, playlists: Vec<Playlist>) {
+        self.playlists = playlists;
+    }
+
+    /// Build the menu items based on current login state.
+    fn menu_items(&self) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+
+        if self.user.is_some() {
+            items.push(MenuItem {
+                label: "My Playlists",
+                desc: "Browse your playlists and collections",
+                action: MenuAction::Playlists,
+            });
+        }
+
+        items.push(MenuItem {
+            label: "Search",
+            desc: "Search for songs, albums, and artists",
+            action: MenuAction::Search,
+        });
+
+        if self.user.is_some() {
+            items.push(MenuItem {
+                label: "Daily Recommend",
+                desc: "Personalized daily mix for you",
+                action: MenuAction::DailyRecommend,
+            });
+            items.push(MenuItem {
+                label: "Personal FM",
+                desc: "Endless radio tailored to your taste",
+                action: MenuAction::PersonalFm,
+            });
+        }
+
+        if self.user.is_some() {
+            items.push(MenuItem {
+                label: "Logout",
+                desc: "Sign out of your account",
+                action: MenuAction::Logout,
+            });
+        } else {
+            items.push(MenuItem {
+                label: "Login",
+                desc: "Sign in to your Netease account",
+                action: MenuAction::Login,
+            });
+        }
+
+        items.push(MenuItem {
+            label: "Settings",
+            desc: "App preferences and configuration",
+            action: MenuAction::Settings,
+        });
+        items.push(MenuItem {
+            label: "Quit",
+            desc: "Exit netune",
+            action: MenuAction::Quit,
+        });
+
+        items
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        let menu_h = (MENU_ITEMS.len() * 2 + 2) as u16;
+        let menu_items = self.menu_items();
+
+        // Reserve space for user info if logged in
+        let user_info_h: u16 = if self.user.is_some() { 3 } else { 0 };
+        let menu_h = (menu_items.len() * 2 + 2) as u16;
         let menu_w = 64u16.min(area.width.saturating_sub(4));
-        let pad_v = area.height.saturating_sub(menu_h) / 2;
+        let pad_v = area.height.saturating_sub(menu_h + user_info_h) / 2;
         let pad_h = (area.width.saturating_sub(menu_w)) / 2;
 
         let v = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(pad_v),
+                Constraint::Length(user_info_h),
                 Constraint::Length(menu_h),
                 Constraint::Min(0),
             ])
@@ -110,9 +154,50 @@ impl HomePage {
                 Constraint::Length(menu_w),
                 Constraint::Min(0),
             ])
-            .split(v[1]);
+            .split(v[2]);
 
-        let items: Vec<ListItem> = MENU_ITEMS
+        // Render user info if logged in
+        if let Some(ref user) = self.user {
+            let h_user = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(pad_h),
+                    Constraint::Length(menu_w),
+                    Constraint::Min(0),
+                ])
+                .split(v[1]);
+
+            let mut lines = vec![Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    &user.nickname,
+                    Style::default()
+                        .fg(Theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])];
+            if let Some(ref avatar) = user.avatar_url {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(avatar.as_str(), Style::default().fg(Theme::MUTED)),
+                ]));
+            }
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                .title(Span::styled(
+                    " User ",
+                    Style::default()
+                        .fg(Theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            let user_widget = ratatui::widgets::Paragraph::new(lines).block(block);
+            f.render_widget(user_widget, h_user[1]);
+        }
+
+        let items: Vec<ListItem> = menu_items
             .iter()
             .map(|item| {
                 ListItem::new(vec![
@@ -157,15 +242,16 @@ impl HomePage {
         if k.kind != KeyEventKind::Press {
             return PageAction::None;
         }
+        let len = self.menu_items().len();
         match k.code {
             KeyCode::Down | KeyCode::Char('j') => {
                 let i = self.list_state.selected().unwrap_or(0);
-                self.list_state.select(Some((i + 1) % MENU_ITEMS.len()));
+                self.list_state.select(Some((i + 1) % len));
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let i = self.list_state.selected().unwrap_or(0);
                 self.list_state
-                    .select(Some(i.checked_sub(1).unwrap_or(MENU_ITEMS.len() - 1)));
+                    .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
             }
             KeyCode::Enter | KeyCode::Char('l') => return self.activate(),
             KeyCode::Char('q') | KeyCode::Esc => return PageAction::Quit,
@@ -175,7 +261,8 @@ impl HomePage {
     }
 
     fn activate(&self) -> PageAction {
-        let action = MENU_ITEMS
+        let menu_items = self.menu_items();
+        let action = menu_items
             .get(self.list_state.selected().unwrap_or(0))
             .map(|item| item.action)
             .unwrap_or(MenuAction::Quit);
@@ -191,6 +278,7 @@ impl HomePage {
                 PageAction::Push(super::Page::Player(super::PlayerPage::new()))
             }
             MenuAction::Login => PageAction::Push(super::Page::Login(super::LoginPage::new())),
+            MenuAction::Logout => PageAction::Pop,
             MenuAction::Settings => {
                 PageAction::Push(super::Page::Settings(super::SettingsPage::new()))
             }
@@ -205,7 +293,8 @@ impl HomePage {
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
-        let label = MENU_ITEMS
+        let menu_items = self.menu_items();
+        let label = menu_items
             .get(self.list_state.selected().unwrap_or(0))
             .map(|item| item.label)
             .unwrap_or("");
