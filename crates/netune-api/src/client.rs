@@ -37,6 +37,32 @@ impl NeteaseApiClient {
         }
     }
 
+    /// Get the actual current login state (async, requires locking).
+    pub async fn current_login_state(&self) -> LoginState {
+        self.login_state.read().await.clone()
+    }
+
+    /// Fetch the current logged-in user profile via /api/user/account.
+    /// This uses the session cookies (MUSIC_U) set during QR login.
+    async fn fetch_current_user_profile(&self) -> std::result::Result<UserProfile, ApiError> {
+        let path = "/api/user/account";
+        let params = serde_json::json!({});
+        let resp: ApiUserAccountResponse = self.inner_request(path, &params).await?;
+        if resp.code != 200 {
+            return Err(ApiError::Code(resp.code));
+        }
+        match resp.profile {
+            Some(p) => Ok(UserProfile {
+                uid: p.user_id,
+                nickname: p.nickname,
+                avatar_url: p.avatar_url,
+            }),
+            None => Err(ApiError::Message(
+                "no profile in /api/user/account response".into(),
+            )),
+        }
+    }
+
     /// Send a GET request and return the raw deserialized response.
     async fn inner_request<T: serde::de::DeserializeOwned>(
         &self,
@@ -147,8 +173,9 @@ impl NeteaseApiClient {
 #[async_trait]
 impl NeteaseClient for NeteaseApiClient {
     fn login_state(&self) -> &LoginState {
-        // NOTE: This returns a static reference placeholder.
-        // Real implementation will use Arc<RwLock<LoginState>> properly.
+        // NOTE: We return a static reference. Callers should use `self.login_state`
+        // Arc<RwLock<LoginState>> directly for real-time access. The trait signature
+        // requires `&LoginState` so we cannot return a guard here.
         static LOGGED_OUT: LoginState = LoginState::LoggedOut;
         &LOGGED_OUT
     }
@@ -213,15 +240,26 @@ impl NeteaseClient for NeteaseApiClient {
             .map_err(|e| netune_core::NetuneError::Network(format!("parse qrcheck: {e}, body={body}")))?;
         match result.code {
             803 => {
-                let profile = result.profile.map(|p| UserProfile {
-                    uid: p.user_id,
-                    nickname: p.nickname,
-                    avatar_url: p.avatar_url,
-                }).unwrap_or(UserProfile {
-                    uid: 0,
-                    nickname: "User".into(),
-                    avatar_url: None,
-                });
+                // The QR login endpoint often doesn't include profile data.
+                // If missing, fetch from /api/user/account using the fresh cookies.
+                let profile = match result.profile {
+                    Some(p) => UserProfile {
+                        uid: p.user_id,
+                        nickname: p.nickname,
+                        avatar_url: p.avatar_url,
+                    },
+                    None => {
+                        tracing::debug!("QR login response has no profile, fetching from /api/user/account");
+                        self.fetch_current_user_profile()
+                            .await
+                            .map_err(|e| netune_core::NetuneError::Network(format!(
+                                "login succeeded but failed to fetch user profile: {e}"
+                            )))?
+                    }
+                };
+                tracing::info!(uid = profile.uid, nickname = %profile.nickname, "Login profile resolved");
+                // Update stored login state
+                *self.login_state.write().await = LoginState::LoggedIn(profile.clone());
                 Ok(Some(profile))
             }
             800 => Err(netune_core::NetuneError::Auth(
@@ -239,6 +277,7 @@ impl NeteaseClient for NeteaseApiClient {
             .inner_request(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        *self.login_state.write().await = LoginState::LoggedOut;
         Ok(())
     }
 
@@ -337,7 +376,7 @@ impl NeteaseClient for NeteaseApiClient {
         let path = "/weapi/song/lyric";
         let params = serde_json::json!({
             "id": song_id,
-            "lv": -1,
+            "lv": 1,
             "tv": -1
         });
         let result: ApiLyricResponse = self

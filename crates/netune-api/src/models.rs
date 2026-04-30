@@ -162,6 +162,22 @@ pub struct ApiQrCheckResponse {
     pub profile: Option<ApiProfile>,
 }
 
+// ─── User account ──────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApiUserAccountResponse {
+    pub code: i32,
+    pub account: Option<ApiAccount>,
+    pub profile: Option<ApiProfile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiAccount {
+    pub id: u64,
+    pub user_name: Option<String>,
+}
+
 // ─── User playlists ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

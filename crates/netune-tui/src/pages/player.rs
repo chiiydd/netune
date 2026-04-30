@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap};
 use ratatui::Frame;
 
 use netune_core::models::Song;
+use netune_core::models::Lyrics;
 
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
@@ -26,7 +27,7 @@ pub struct PlayerPage {
     elapsed: Duration,
     duration: Duration,
     is_playing: bool,
-    lyrics: Vec<String>,
+    lyrics: Option<Lyrics>,
     current_lyric_idx: usize,
     volume: u16,
 }
@@ -45,7 +46,7 @@ impl PlayerPage {
             elapsed: Duration::ZERO,
             duration: Duration::ZERO,
             is_playing: false,
-            lyrics: Vec::new(),
+            lyrics: None,
             current_lyric_idx: 0,
             volume: 80,
         }
@@ -58,7 +59,8 @@ impl PlayerPage {
         self.progress = 0.0;
         self.elapsed = Duration::ZERO;
         self.is_playing = true;
-        self.lyrics.clear();
+        // Don't clear lyrics here — they will be set separately via set_lyrics.
+        // Clearing would lose lyrics fetched concurrently with the URL.
         self.current_lyric_idx = 0;
     }
 
@@ -77,9 +79,9 @@ impl PlayerPage {
         self.volume = vol;
     }
 
-    /// Set lyrics lines.
-    pub fn set_lyrics(&mut self, lines: Vec<String>) {
-        self.lyrics = lines;
+    /// Set lyrics (timestamped, from the API).
+    pub fn set_lyrics(&mut self, lyrics: Lyrics) {
+        self.lyrics = Some(lyrics);
         self.current_lyric_idx = 0;
     }
 
@@ -166,40 +168,46 @@ impl PlayerPage {
     fn render_lyrics(&self, f: &mut Frame, area: Rect) {
         let inner_height = area.height.saturating_sub(2) as usize;
 
-        let lines: Vec<Line> = if self.lyrics.is_empty() {
-            vec![Line::from(Span::styled(
+        let lines: Vec<Line> = match &self.lyrics {
+            None => vec![Line::from(Span::styled(
+                "  Loading lyrics…",
+                Style::default().fg(Theme::MUTED),
+            ))],
+            Some(lyrics) if lyrics.lines.is_empty() => vec![Line::from(Span::styled(
                 "  No lyrics available",
                 Style::default().fg(Theme::MUTED),
-            ))]
-        } else {
-            let total = self.lyrics.len();
-            let idx = self.current_lyric_idx.min(total.saturating_sub(1));
+            ))],
+            Some(lyrics) => {
+                let total = lyrics.lines.len();
+                let idx = self.current_lyric_idx.min(total.saturating_sub(1));
 
-            // Center current lyric line in the visible area.
-            let half = inner_height / 2;
-            let start = idx.saturating_sub(half);
-            let end = (start + inner_height).min(total);
+                // Center current lyric line in the visible area.
+                let half = inner_height / 2;
+                let start = idx.saturating_sub(half);
+                let end = (start + inner_height).min(total);
 
-            self.lyrics[start..end]
-                .iter()
-                .enumerate()
-                .map(|(i, text)| {
-                    let abs_idx = start + i;
-                    if abs_idx == idx {
-                        Line::from(Span::styled(
-                            format!("▶ {text}"),
-                            Style::default()
-                                .fg(Theme::ACCENT)
-                                .add_modifier(Modifier::BOLD),
-                        ))
-                    } else {
-                        Line::from(Span::styled(
-                            format!("  {text}"),
-                            Style::default().fg(Theme::MUTED),
-                        ))
-                    }
-                })
-                .collect()
+                lyrics.lines[start..end]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, line)| {
+                        let abs_idx = start + i;
+                        let text = &line.text;
+                        if abs_idx == idx {
+                            Line::from(Span::styled(
+                                format!("▶ {text}"),
+                                Style::default()
+                                    .fg(Theme::ACCENT)
+                                    .add_modifier(Modifier::BOLD),
+                            ))
+                        } else {
+                            Line::from(Span::styled(
+                                format!("  {text}"),
+                                Style::default().fg(Theme::MUTED),
+                            ))
+                        }
+                    })
+                    .collect()
+            }
         };
 
         let block = Block::default()
@@ -318,12 +326,20 @@ impl PlayerPage {
     }
 
     fn update_lyric_idx(&mut self) {
-        if self.lyrics.is_empty() {
+        let Some(ref lyrics) = self.lyrics else {
+            return;
+        };
+        if lyrics.lines.is_empty() {
             return;
         }
-        // Lyrics are plain strings without timestamps, so just keep the
-        // current index. When timestamped lyrics are wired up via the API,
-        // this will search by elapsed time.
+        let position_ms = self.elapsed.as_millis() as u64;
+        // Find the last lyric line whose timestamp <= current position.
+        self.current_lyric_idx = lyrics
+            .lines
+            .iter()
+            .position(|line| line.timestamp > position_ms)
+            .unwrap_or(lyrics.lines.len())
+            .saturating_sub(1);
     }
 
     // ── Chrome contract ─────────────────────────────────────────────────────

@@ -65,8 +65,12 @@ impl App {
         };
         let quality = self.config.quality;
 
-        // Fetch streaming URL.
-        let url = match client.song_url(song.id, quality).await {
+        // Fetch streaming URL and lyrics concurrently to avoid UI freeze.
+        let url_fut = client.song_url(song.id, quality);
+        let lyrics_fut = client.lyrics(song.id);
+        let (url_result, lyrics_result) = tokio::join!(url_fut, lyrics_fut);
+
+        let url = match url_result {
             Ok(u) => u,
             Err(e) => {
                 tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
@@ -88,6 +92,21 @@ impl App {
 
         // Update the player page.
         self.update_player_page_for(song);
+
+        // Set lyrics on the player page (if fetched successfully).
+        match lyrics_result {
+            Ok(lyrics) => {
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_lyrics(lyrics);
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch lyrics");
+            }
+        }
 
         tracing::info!("Now playing");
     }
