@@ -186,14 +186,16 @@ impl NeteaseClient for NeteaseApiClient {
             .map_err(|e| netune_core::NetuneError::Network(format!("parse qrcheck: {e}, body={body}")))?;
         match result.code {
             803 => {
-                let profile = result
-                    .profile
-                    .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
-                Ok(Some(UserProfile {
-                    uid: profile.user_id,
-                    nickname: profile.nickname,
-                    avatar_url: profile.avatar_url,
-                }))
+                let profile = result.profile.map(|p| UserProfile {
+                    uid: p.user_id,
+                    nickname: p.nickname,
+                    avatar_url: p.avatar_url,
+                }).unwrap_or(UserProfile {
+                    uid: 0,
+                    nickname: "User".into(),
+                    avatar_url: None,
+                });
+                Ok(Some(profile))
             }
             800 => Err(netune_core::NetuneError::Auth(
                 result.message.unwrap_or_else(|| "QR code expired".into()),
