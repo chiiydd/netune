@@ -114,53 +114,57 @@ pub fn weapi_encrypt(data: &serde_json::Value) -> Result<(String, String)> {
     let plaintext = serde_json::to_string(data)
         .map_err(|e| netune_core::NetuneError::Crypto(e.to_string()))?;
 
-    // Generate random 16-char alphanumeric second key
+    // Generate random 16-char alphanumeric secretKey
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf)
         .map_err(|e| netune_core::NetuneError::Crypto(e.to_string()))?;
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let second_key_bytes: [u8; 16] = std::array::from_fn(|i| CHARSET[(buf[i] as usize) % CHARSET.len()]);
+    let secret_key: [u8; 16] = std::array::from_fn(|i| CHARSET[(buf[i] as usize) % CHARSET.len()]);
 
-    // Fixed IV: 16 zero bytes
-    let iv = [0u8; 16];
+    // secondKey = secretKey reversed (used for RSA encryption)
+    let second_key: [u8; 16] = std::array::from_fn(|i| secret_key[15 - i]);
+
+    // Fixed IV (Netease spec)
+    let iv = *b"0102030405060708";
 
     // First AES-CBC: plaintext with WEAPI_KEY
     let encrypted1 = aes_cbc_encrypt(plaintext.as_bytes(), WEAPI_KEY, &iv)?;
 
-    // Second AES-CBC: first result with random key
-    let encrypted2 = aes_cbc_encrypt(&encrypted1, &second_key_bytes, &iv)?;
+    // Second AES-CBC: first result with secretKey
+    let encrypted2 = aes_cbc_encrypt(&encrypted1, &secret_key, &iv)?;
 
     // Base64 encode → params
     let params = base64::engine::general_purpose::STANDARD.encode(&encrypted2);
 
-    // RSA encrypt the second key → encSecKey (hex)
-    let enc_sec_key = rsa_encrypt_key(&second_key_bytes)?;
+    // RSA encrypt secondKey (reversed secretKey) → encSecKey (hex)
+    let enc_sec_key = rsa_encrypt_key(&second_key)?;
 
     Ok((params, enc_sec_key))
 }
 
-/// RSA-encrypt a 16-byte key using Netease's public key (PKCS#1 v1.5).
+/// RSA raw encryption (no padding): c = key_int^e mod n.
+///
+/// Left-pads key to 128 bytes, interprets as big-endian integer,
+/// then computes modular exponentiation with Netease's public key.
 fn rsa_encrypt_key(key: &[u8]) -> Result<String> {
-    use rsa::pkcs1v15::Pkcs1v15Encrypt;
-    use rsa::BigUint;
-    use rsa::RsaPublicKey;
+    use num_bigint::BigUint;
 
-    // Netease Cloud Music RSA public key (1024-bit)
-    let modulus_bytes = hex::decode(
+    // Netease Cloud Music RSA public key parameters
+    let n = BigUint::from_bytes_be(&hex::decode(
         "00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280104e0312ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932575cce10b424d813cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7",
-    ).map_err(|e| netune_core::NetuneError::Crypto(format!("hex decode error: {e}")))?;
-    let modulus = BigUint::from_bytes_be(&modulus_bytes);
-    let exponent = BigUint::from(65537u32);
+    ).map_err(|e| netune_core::NetuneError::Crypto(format!("hex decode error: {e}")))?);
+    let e = BigUint::from(65537u32);
 
-    let pubkey = RsaPublicKey::new(modulus, exponent)
-        .map_err(|e| netune_core::NetuneError::Crypto(format!("RSA key error: {e}")))?;
+    // Left-pad key to 128 bytes (1024-bit modulus)
+    let mut padded = vec![0u8; 128 - key.len()];
+    padded.extend_from_slice(key);
+    let m = BigUint::from_bytes_be(&padded);
 
-    let padding = Pkcs1v15Encrypt;
-    let encrypted = pubkey
-        .encrypt(&mut rsa::rand_core::OsRng, padding, key)
-        .map_err(|e| netune_core::NetuneError::Crypto(format!("RSA encrypt error: {e}")))?;
+    // c = m^e mod n
+    let c = m.modpow(&e, &n);
 
-    Ok(hex::encode(encrypted))
+    // Encode as zero-padded hex (lowercase, 256 chars for 128 bytes)
+    Ok(format!("{c:0256x}"))
 }
 
 /// PKCS7-padded AES-128-ECB decryption (manual block-by-block).

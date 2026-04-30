@@ -19,6 +19,7 @@ hex         = { workspace = true }
 base64      = { workspace = true }
 getrandom   = { workspace = true }
 rsa         = { workspace = true }
+num-bigint  = { workspace = true }
 url         = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }

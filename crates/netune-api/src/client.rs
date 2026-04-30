@@ -126,13 +126,11 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_generate(&self) -> Result<String> {
-        let path = "/weapi/login/qrcode/unikey";
-        let params = serde_json::json!({"type": 1, "noCheckToken": true});
-        let (enc_params, enc_sec_key) = crypto::weapi_encrypt(&params)?;
+        let path = "/api/login/qrcode/unikey";
         let resp = self
             .http
             .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &enc_params), ("encSecKey", &enc_sec_key)])
+            .form(&[("type", "1")])
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
@@ -152,7 +150,7 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_check(&self, key: &str) -> Result<Option<UserProfile>> {
-        let path = "/weapi/login/qrcode/client/login";
+        let path = "/api/login/qrcode/client/login";
 
         // Inject cookies before checking: os=pc and random NMTID
         let url: reqwest::Url = self
@@ -167,16 +165,10 @@ impl NeteaseClient for NeteaseApiClient {
         self.cookie_jar
             .add_cookie_str(&format!("NMTID={nmtid}"), &url);
 
-        let params = serde_json::json!({
-            "type": 1,
-            "noCheckToken": true,
-            "key": key,
-        });
-        let (enc_params, enc_sec_key) = crypto::weapi_encrypt(&params)?;
         let resp = self
             .http
             .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &enc_params), ("encSecKey", &enc_sec_key)])
+            .form(&[("key", key), ("type", "1"), ("noCheckToken", "true")])
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
@@ -575,3 +567,5 @@ mod qr_headers_test {
         eprintln!("Body len: {}, content: {}", body.len(), &body[..500.min(body.len())]);
     }
 }
+
+

@@ -62,6 +62,7 @@ hex        = "0.4"
 base64     = "0.22"
 getrandom  = "0.2"
 rsa        = "0.9"
+num-bigint = "0.4"
 
 # Logging
 tracing            = "0.1"
