@@ -72,6 +72,11 @@ impl PlayerPage {
         self.update_progress();
     }
 
+    /// Set volume display (0-100).
+    pub fn set_volume(&mut self, vol: u16) {
+        self.volume = vol;
+    }
+
     /// Set lyrics lines.
     pub fn set_lyrics(&mut self, lines: Vec<String>) {
         self.lyrics = lines;
@@ -273,29 +278,18 @@ impl PlayerPage {
 
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => PageAction::Pop,
-            KeyCode::Char(' ') => {
-                self.is_playing = !self.is_playing;
-                PageAction::None
-            }
+            KeyCode::Char(' ') => PageAction::TogglePause,
             KeyCode::Left => {
-                let new_elapsed = self.elapsed.saturating_sub(Duration::from_secs(5));
-                self.elapsed = new_elapsed;
-                self.update_progress();
-                PageAction::None
+                PageAction::Seek(-5.0)
             }
             KeyCode::Right => {
-                let new_elapsed = self.elapsed + Duration::from_secs(5);
-                self.elapsed = new_elapsed.min(self.duration);
-                self.update_progress();
-                PageAction::None
+                PageAction::Seek(5.0)
             }
             KeyCode::Up => {
-                self.volume = (self.volume + 5).min(100);
-                PageAction::None
+                PageAction::SetVolume(self.volume.saturating_add(5).min(100))
             }
             KeyCode::Down => {
-                self.volume = self.volume.saturating_sub(5);
-                PageAction::None
+                PageAction::SetVolume(self.volume.saturating_sub(5))
             }
             _ => PageAction::None,
         }

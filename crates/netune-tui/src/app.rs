@@ -398,6 +398,43 @@ impl App {
                     }
                 }
             }
+
+            // ── Player controls ────────────────────────────────────────
+            PageAction::TogglePause => {
+                if let Some(ref player) = self.player {
+                    player.toggle_pause();
+                    // Update UI immediately
+                    let playing = player.is_playing();
+                    let vol = (player.volume() * 100.0) as u16;
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.update_from_player(
+                                player.position(),
+                                player.duration(),
+                                playing,
+                            );
+                            pp.set_volume(vol);
+                            break;
+                        }
+                    }
+                }
+            }
+            PageAction::Seek(delta) => {
+                if let Some(ref player) = self.player {
+                    let _ = player.seek(delta);
+                }
+            }
+            PageAction::SetVolume(vol) => {
+                if let Some(ref player) = self.player {
+                    player.set_volume(vol as f32 / 100.0);
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_volume(vol);
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 }

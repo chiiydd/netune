@@ -209,7 +209,10 @@ impl SearchPage {
     fn handle_normal(&mut self, code: KeyCode) -> PageAction {
         let len = self.results.len();
         match code {
-            KeyCode::Esc | KeyCode::Char('i') => {
+            KeyCode::Esc => {
+                return PageAction::Pop;
+            }
+            KeyCode::Char('i') => {
                 self.mode = SearchMode::Input;
             }
             KeyCode::Down | KeyCode::Char('j') if len > 0 => {

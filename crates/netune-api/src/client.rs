@@ -353,7 +353,7 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn daily_recommend(&self) -> Result<DailyRecommend> {
-        let path = "/weapi/v2/discovery/recommend/songs";
+        let path = "/weapi/v3/discovery/recommend/songs";
         let params = serde_json::json!({ "total": true, "limit": 30 });
         let data = self
             .request::<ApiDailyRecommendResponse>(path, &params)

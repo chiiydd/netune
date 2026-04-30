@@ -45,6 +45,12 @@ pub enum PageAction {
     PlayQueue(Vec<Song>),
     /// Fetch playlist detail tracks from API.
     FetchPlaylistDetail(u64),
+    /// Toggle pause/resume on the audio player.
+    TogglePause,
+    /// Seek forward/backward by N seconds.
+    Seek(f64),
+    /// Set volume (0-100).
+    SetVolume(u16),
 }
 
 /// Settings page focus fields.
