@@ -21,3 +21,6 @@ url         = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
 qrcode      = { workspace = true }
+
+[lints]
+workspace = true

@@ -10,6 +10,9 @@ use netune_core::models::*;
 use netune_core::traits::NeteaseClient;
 use netune_core::Result;
 
+use crate::crypto;
+use crate::models::*;
+
 /// HTTP-based Netease Cloud Music API client.
 pub struct NeteaseApiClient {
     http: Client,
@@ -39,8 +42,38 @@ impl NeteaseClient for NeteaseApiClient {
         &LOGGED_OUT
     }
 
-    async fn login_phone(&self, _phone: &str, _password: &str) -> Result<UserProfile> {
-        todo!("A组(Codex): 实现手机号登录")
+    async fn login_phone(&self, phone: &str, password: &str) -> Result<UserProfile> {
+        let body = serde_json::json!({
+            "phone": phone,
+            "password": password,
+            "countrycode": "86"
+        });
+        let params = crypto::encrypt_linuxapi(&body.to_string())
+            .map_err(|e| netune_core::NetuneError::Auth(e.to_string()))?;
+        let resp = self
+            .http
+            .post(format!("{}/weapi/login/cellphone", self.base_url))
+            .form(&[("params", &params)])
+            .send()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let result: ApiLoginResponse = resp
+            .json()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        if result.code != 200 {
+            return Err(netune_core::NetuneError::Auth(
+                result.msg.unwrap_or_default(),
+            ));
+        }
+        let profile = result
+            .profile
+            .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
+        Ok(UserProfile {
+            uid: profile.userId,
+            nickname: profile.nickname,
+            avatar_url: profile.avatarUrl,
+        })
     }
 
     async fn login_email(&self, _email: &str, _password: &str) -> Result<UserProfile> {
