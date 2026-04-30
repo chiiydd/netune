@@ -1,0 +1,84 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/netune-core",
+    "crates/netune-api",
+    "crates/netune-player",
+    "crates/netune-tui",
+]
+default-members = ["crates/netune-tui"]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2024"
+license       = "MIT"
+repository    = "https://github.com/chiiydd/netune"
+rust-version  = "1.85"
+authors       = ["netune contributors"]
+
+# ─── Workspace-wide dependencies ──────────────────────────────────────────────
+[workspace.dependencies]
+# Internal crates
+netune-core    = { path = "crates/netune-core" }
+netune-api     = { path = "crates/netune-api" }
+netune-player  = { path = "crates/netune-player" }
+
+# Error handling
+thiserror   = "2.0"
+color-eyre  = "0.6"
+
+# Serialization
+serde       = { version = "1.0", features = ["derive"] }
+serde_json  = "1.0"
+toml        = "0.8"
+
+# Paths
+camino      = { version = "1.1", features = ["serde1"] }
+dirs        = "6.0"
+
+# Async runtime
+tokio = { version = "1.40", features = [
+    "rt-multi-thread", "fs", "process", "signal",
+    "sync", "io-util", "macros", "time",
+] }
+futures = "0.3"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "rustls-tls"], default-features = false }
+
+# TUI
+ratatui   = "0.29"
+crossterm = "0.28"
+
+# Audio
+rodio = "0.22"
+
+# Crypto
+aes        = "0.8"
+cbc        = "0.1"
+ecb        = "0.1"
+md-5       = "0.10"
+hex        = "0.4"
+base64     = "0.22"
+
+# Logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+
+# Utilities
+log      = "0.4"
+url      = "2"
+chrono   = "0.4"
+qrcode   = "0.14"
+async-trait = "0.1"
+
+# ─── Build profiles ──────────────────────────────────────────────────────────
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.release]
+lto           = "fat"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
