@@ -10,6 +10,7 @@ use netune_core::Result;
 use netune_core::models::*;
 use netune_core::traits::NeteaseClient;
 
+#[cfg(test)]
 use crate::crypto;
 use crate::models::*;
 
@@ -36,18 +37,43 @@ impl NeteaseApiClient {
         }
     }
 
-    /// Send a request and return the raw deserialized response.
+    /// Send a GET request and return the raw deserialized response.
     async fn inner_request<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         params: &serde_json::Value,
     ) -> std::result::Result<T, ApiError> {
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| ApiError::Message(e.to_string()))?;
+        // Convert /weapi/ path to /api/ path
+        let api_path = path.replace("/weapi/", "/api/");
+
+        // Build query string from JSON params
+        let mut url = format!("{}{api_path}", self.base_url);
+        if let Some(obj) = params.as_object() {
+            if !obj.is_empty() {
+                let qs: String = obj
+                    .iter()
+                    .map(|(k, v)| {
+                        let val = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            _ => v.to_string(),
+                        };
+                        format!(
+                            "{}={}",
+                            urlencoding::encode(k),
+                            urlencoding::encode(&val)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("&");
+                url = format!("{url}?{qs}");
+            }
+        }
+
         let resp = self
             .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
@@ -56,8 +82,9 @@ impl NeteaseApiClient {
             .text()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
-        eprintln!("[{}] {} -> {}...", status, path, &body[..body.len().min(200)]);
-        serde_json::from_str(&body).map_err(|e| ApiError::Message(e.to_string()))
+        tracing::debug!(status = %status, path = %api_path, body_len = body.len(), "API response");
+        serde_json::from_str(&body)
+            .map_err(|e| ApiError::Message(format!("{e}: {}", &body[..body.len().min(200)])))
     }
 
     /// Send a request, check the code, and extract the inner data.
@@ -597,5 +624,24 @@ mod api_qr_test {
         assert!(result.unwrap().is_none(), "Should be waiting (None)");
         
         eprintln!("Full flow OK!");
+    }
+}
+
+#[cfg(test)]
+mod eapi_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_eapi_user_playlists() {
+        let client = NeteaseApiClient::new();
+        let params = serde_json::json!({"uid": 0, "limit": 30, "offset": 0});
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), "/weapi/user/playlist").unwrap();
+        let resp = client.http
+            .post("https://music.163.com/weapi/user/playlist")
+            .form(&[("params", &encrypted)])
+            .send().await.unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {} content: {}", body.len(), &body[..200.min(body.len())]);
     }
 }
