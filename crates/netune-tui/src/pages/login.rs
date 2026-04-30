@@ -49,7 +49,7 @@ impl LoginPage {
     /// Called when a new QR key is received.
     pub fn set_qr_key(&mut self, unikey: String) {
         self.qr_url = Some(format!(
-            "https://music.163.com/login?codekey={unikey}&callback=close"
+            "https://music.163.com/login?codekey={unikey}"
         ));
         self.unikey = Some(unikey);
         self.qr_state = QrLoginState::WaitingScan;
@@ -206,8 +206,8 @@ impl LoginPage {
 
     pub fn tick(&mut self) -> PageAction {
         self.tick_count = self.tick_count.wrapping_add(1);
-        // Poll every ~2 seconds (120 ticks at ~60 Hz / 100ms poll).
-        if self.tick_count % 120 == 0
+        // Poll every ~1 second (10 ticks at 100ms poll).
+        if self.tick_count % 10 == 0
             && matches!(
                 self.qr_state,
                 QrLoginState::WaitingScan | QrLoginState::Scanned
