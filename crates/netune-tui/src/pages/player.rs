@@ -27,6 +27,7 @@ pub struct PlayerPage {
     elapsed: Duration,
     duration: Duration,
     is_playing: bool,
+    loading: bool,
     lyrics: Option<Lyrics>,
     current_lyric_idx: usize,
     volume: u16,
@@ -46,6 +47,7 @@ impl PlayerPage {
             elapsed: Duration::ZERO,
             duration: Duration::ZERO,
             is_playing: false,
+            loading: false,
             lyrics: None,
             current_lyric_idx: 0,
             volume: 80,
@@ -85,6 +87,11 @@ impl PlayerPage {
         self.current_lyric_idx = 0;
     }
 
+    /// Set loading state (shown while audio is buffering).
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+    }
+
     /// Get the current song (for context display).
     pub fn song(&self) -> Option<&Song> {
         self.song.as_ref()
@@ -103,7 +110,32 @@ impl PlayerPage {
             .split(area);
 
         self.render_info(f, chunks[0]);
-        self.render_lyrics(f, chunks[1]);
+
+        if self.loading {
+            let loading_text = Paragraph::new(Line::from(vec![
+                Span::styled("  ⏳ ", Style::default().fg(Theme::ACCENT)),
+                Span::styled(
+                    "Loading audio...",
+                    Style::default().fg(Theme::MUTED).add_modifier(Modifier::ITALIC),
+                ),
+            ]))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .title(Span::styled(
+                        " ♫ Lyrics ",
+                        Style::default()
+                            .fg(Theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
+            f.render_widget(loading_text, chunks[1]);
+        } else {
+            self.render_lyrics(f, chunks[1]);
+        }
+
         self.render_controls(f, chunks[2]);
     }
 

@@ -59,11 +59,21 @@ impl App {
 
     /// Play a song: fetch its streaming URL, start playback, update pages.
     async fn do_play_song(&mut self, song: Song) {
+        let quality = self.config.quality;
+
+        // Immediately show the player page with loading state.
+        self.update_player_page_for(song.clone());
+        for page in &mut self.page_stack {
+            if let Page::Player(pp) = page {
+                pp.set_loading(true);
+                break;
+            }
+        }
+
         let Some(ref client) = self.api_client else {
             tracing::warn!("Cannot play song — no API client");
             return;
         };
-        let quality = self.config.quality;
 
         // Fetch streaming URL and lyrics concurrently to avoid UI freeze.
         let url_fut = client.song_url(song.id, quality);
@@ -74,6 +84,12 @@ impl App {
             Ok(u) => u,
             Err(e) => {
                 tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_loading(false);
+                        break;
+                    }
+                }
                 return;
             }
         };
@@ -82,6 +98,12 @@ impl App {
         if let Some(ref player) = self.player {
             if let Err(e) = player.play(&url).await {
                 tracing::warn!(error = %e, "Playback failed");
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_loading(false);
+                        break;
+                    }
+                }
                 return;
             }
             player.set_volume(self.config.volume);
@@ -90,14 +112,12 @@ impl App {
         // Update queue: replace with single song and set as current.
         self.play_queue.load(vec![song.clone()]);
 
-        // Update the player page.
-        self.update_player_page_for(song);
-
-        // Set lyrics on the player page (if fetched successfully).
+        // Clear loading state and set lyrics.
         match lyrics_result {
             Ok(lyrics) => {
                 for page in &mut self.page_stack {
                     if let Page::Player(pp) = page {
+                        pp.set_loading(false);
                         pp.set_lyrics(lyrics);
                         break;
                     }
@@ -105,6 +125,12 @@ impl App {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to fetch lyrics");
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_loading(false);
+                        break;
+                    }
+                }
             }
         }
 
