@@ -100,12 +100,107 @@ impl NeteaseClient for NeteaseApiClient {
         todo!("A组(Codex): 实现获取歌单详情")
     }
 
-    async fn search_songs(&self, _keyword: &str, _page: u32, _size: u32) -> Result<SearchResult> {
-        todo!("A组(Codex): 实现歌曲搜索")
+    async fn search_songs(&self, keyword: &str, page: u32, size: u32) -> Result<SearchResult> {
+        let path = "/weapi/cloudsearch/get/web";
+        let params = serde_json::json!({
+            "s": keyword,
+            "type": 1,
+            "offset": page * size,
+            "limit": size,
+            "total": true
+        });
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let result: ApiSearchResponse = resp
+            .json()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        if result.code != 200 {
+            return Err(netune_core::NetuneError::Network(format!(
+                "search failed: code {}",
+                result.code
+            )));
+        }
+        let search_result = result.result.unwrap_or(ApiSearchResult {
+            songs: vec![],
+            songCount: 0,
+        });
+        let songs: Vec<Song> = search_result
+            .songs
+            .into_iter()
+            .map(|t| {
+                let (album_id, album_name, cover_url) = match t.al {
+                    Some(al) => (al.id, al.name, al.picUrl),
+                    None => (0, String::new(), None),
+                };
+                Song {
+                    id: t.id,
+                    name: t.name,
+                    artists: t
+                        .ar
+                        .into_iter()
+                        .map(|a| Artist {
+                            id: a.id,
+                            name: a.name,
+                        })
+                        .collect(),
+                    album: Album {
+                        id: album_id,
+                        name: album_name,
+                        cover_url,
+                    },
+                    duration: t.dt,
+                    quality: QualityLevel::ExHigh,
+                }
+            })
+            .collect();
+        let total = search_result.songCount;
+        Ok(SearchResult {
+            songs,
+            total,
+            has_more: ((page + 1) * size) < total,
+        })
     }
 
-    async fn song_url(&self, _song_id: u64, _quality: QualityLevel) -> Result<String> {
-        todo!("A组(Codex): 实现获取歌曲URL")
+    async fn song_url(&self, song_id: u64, quality: QualityLevel) -> Result<String> {
+        let path = "/weapi/song/enhance/player/url";
+        let params = serde_json::json!({
+            "ids": [song_id],
+            "br": quality.bitrate()
+        });
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let result: ApiSongUrlResponse = resp
+            .json()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        if result.code != 200 {
+            return Err(netune_core::NetuneError::Network(format!(
+                "song_url failed: code {}",
+                result.code
+            )));
+        }
+        let song_url = result
+            .data
+            .into_iter()
+            .find(|d| d.id == song_id)
+            .and_then(|d| d.url)
+            .ok_or_else(|| netune_core::NetuneError::Network("no url available".into()))?;
+        Ok(song_url)
     }
 
     async fn lyrics(&self, _song_id: u64) -> Result<Lyrics> {

@@ -75,3 +75,24 @@ pub struct ApiAlbum {
     pub name: String,
     pub picUrl: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ApiSearchResponse {
+    pub code: i32,
+    pub result: Option<ApiSearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiSearchResult {
+    #[serde(default)]
+    pub songs: Vec<ApiTrack>,
+    #[serde(default)]
+    pub songCount: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiSongUrlResponse {
+    pub code: i32,
+    #[serde(default)]
+    pub data: Vec<ApiSongUrl>,
+}
