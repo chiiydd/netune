@@ -6,6 +6,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::Widget;
 
+/// Minimum quiet zone width in modules (QR spec requires >= 4).
+const QUIET_ZONE: usize = 4;
+
 pub struct QrCodeWidget {
     pub data: String,
 }
@@ -25,29 +28,71 @@ impl Widget for QrCodeWidget {
             Err(_) => return,
         };
 
-        // Convert to boolean grid (dark = true).
-        let width = qr.width();
+        let modules = qr.width();
         let colors: Vec<bool> = qr
             .to_colors()
             .iter()
             .map(|c| matches!(c, qrcode::Color::Dark))
             .collect();
 
-        // Each terminal cell covers 2 vertical modules using ▀ (upper half block).
-        // Background = cell bg, foreground = cell fg.
-        // Module pair (top, bottom) → ▀ with fg=bottom_color, bg=top_color.
-        let modules_per_col = width;
-        let modules_per_row = width;
-        let cell_cols = modules_per_col.min(area.width as usize);
-        let cell_rows = ((modules_per_row + 1) / 2).min(area.height as usize);
+        // Total size including quiet zone on both sides.
+        let total_modules = modules + QUIET_ZONE * 2;
 
-        for cy in 0..cell_rows {
-            for cx in 0..cell_cols {
-                let top_idx = (cy * 2) * modules_per_col + cx;
-                let bot_idx = (cy * 2 + 1) * modules_per_col + cx;
+        // Each terminal cell is 1 wide × 2 tall in module units.
+        let qr_cols = total_modules;
+        let qr_rows = (total_modules + 1) / 2;
 
-                let top_dark = colors.get(top_idx).copied().unwrap_or(false);
-                let bot_dark = colors.get(bot_idx).copied().unwrap_or(false);
+        let avail_w = area.width as usize;
+        let avail_h = area.height as usize;
+
+        // Center the QR code in the available area.
+        let offset_x = avail_w.saturating_sub(qr_cols) / 2;
+        let offset_y = avail_h.saturating_sub(qr_rows) / 2;
+
+        for cy in 0..avail_h {
+            for cx in 0..avail_w {
+                // Position in the total (padded) QR grid.
+                let gx = cx.wrapping_sub(offset_x);
+                let gy = cy.wrapping_sub(offset_y);
+
+                // Both vertical modules for this cell.
+                let top_my = gy * 2;
+                let bot_my = gy * 2 + 1;
+
+                let top_dark = if gx < qr_cols && top_my < total_modules {
+                    let mx = gx;
+                    let my = top_my;
+                    // Map to module coordinates (strip quiet zone).
+                    if mx >= QUIET_ZONE
+                        && mx < modules + QUIET_ZONE
+                        && my >= QUIET_ZONE
+                        && my < modules + QUIET_ZONE
+                    {
+                        let idx = (my - QUIET_ZONE) * modules + (mx - QUIET_ZONE);
+                        colors[idx]
+                    } else {
+                        false // quiet zone = light
+                    }
+                } else {
+                    false // outside QR = light
+                };
+
+                let bot_dark = if gx < qr_cols && bot_my < total_modules {
+                    let mx = gx;
+                    let my = bot_my;
+                    if mx >= QUIET_ZONE
+                        && mx < modules + QUIET_ZONE
+                        && my >= QUIET_ZONE
+                        && my < modules + QUIET_ZONE
+                    {
+                        let idx = (my - QUIET_ZONE) * modules + (mx - QUIET_ZONE);
+                        colors[idx]
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
 
                 let fg = if bot_dark { Color::Black } else { Color::White };
                 let bg = if top_dark { Color::Black } else { Color::White };

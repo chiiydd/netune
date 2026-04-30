@@ -80,8 +80,8 @@ impl LoginPage {
     // ── Rendering ───────────────────────────────────────────────────────────
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        let card_w = 40.min(area.width.saturating_sub(4));
-        let card_h = 24.min(area.height.saturating_sub(2));
+        let card_w = 44.min(area.width.saturating_sub(4));
+        let card_h = 26.min(area.height.saturating_sub(2));
 
         let outer = Layout::default()
             .direction(Direction::Vertical)
