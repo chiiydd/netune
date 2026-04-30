@@ -27,6 +27,7 @@ impl NeteaseApiClient {
         Self {
             http: Client::builder()
                 .cookie_provider(Arc::clone(&cookie_jar))
+                .no_proxy()
                 .build()
                 .expect("Failed to build HTTP client"),
             cookie_jar,
@@ -126,10 +127,11 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_generate(&self) -> Result<String> {
-        let path = "/api/login/qrcode/unikey";
+        let url = format!("{}/api/login/qrcode/unikey", self.base_url);
+        tracing::debug!(url = %url, "QR generate request");
         let resp = self
             .http
-            .post(format!("{}{path}", self.base_url))
+            .post(&url)
             .form(&[("type", "1")])
             .send()
             .await
@@ -138,37 +140,40 @@ impl NeteaseClient for NeteaseApiClient {
             .text()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        tracing::debug!(body = %body, "QR generate response");
         let result: ApiQrKeyResponse = serde_json::from_str(&body)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+            .map_err(|e| netune_core::NetuneError::Network(format!("parse qrkey: {e}, body={body}")))?;
         if result.code != 200 || result.unikey.is_empty() {
             return Err(netune_core::NetuneError::Network(format!(
-                "qr generate failed: code {}",
-                result.code
+                "qr generate failed: code {} body={}",
+                result.code, body
             )));
         }
+        tracing::info!(unikey = %result.unikey, "QR key generated");
         Ok(result.unikey)
     }
 
     async fn login_qr_check(&self, key: &str) -> Result<Option<UserProfile>> {
-        let path = "/api/login/qrcode/client/login";
+        let url_str = format!("{}/api/login/qrcode/client/login", self.base_url);
+        tracing::debug!(key = %key, url = %url_str, "QR check request");
 
         // Inject cookies before checking: os=pc and random NMTID
-        let url: reqwest::Url = self
+        let base_url: reqwest::Url = self
             .base_url
             .parse()
             .map_err(|e| netune_core::NetuneError::Network(format!("url parse: {e}")))?;
-        self.cookie_jar.add_cookie_str("os=pc", &url);
+        self.cookie_jar.add_cookie_str("os=pc", &base_url);
         let mut nmtid_buf = [0u8; 16];
         getrandom::getrandom(&mut nmtid_buf)
             .map_err(|e| netune_core::NetuneError::Crypto(e.to_string()))?;
         let nmtid = hex::encode(nmtid_buf);
         self.cookie_jar
-            .add_cookie_str(&format!("NMTID={nmtid}"), &url);
+            .add_cookie_str(&format!("NMTID={nmtid}"), &base_url);
 
         let resp = self
             .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("key", key), ("type", "1"), ("noCheckToken", "true")])
+            .post(&url_str)
+            .form(&[("key", key), ("type", "1")])
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
@@ -176,8 +181,9 @@ impl NeteaseClient for NeteaseApiClient {
             .text()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        tracing::debug!(body = %body, "QR check response");
         let result: ApiQrCheckResponse = serde_json::from_str(&body)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+            .map_err(|e| netune_core::NetuneError::Network(format!("parse qrcheck: {e}, body={body}")))?;
         match result.code {
             803 => {
                 let profile = result
@@ -569,3 +575,25 @@ mod qr_headers_test {
 }
 
 
+
+#[cfg(test)]
+mod api_qr_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_api_qr_full_flow() {
+        let client = NeteaseApiClient::new();
+        
+        // Step 1: Generate
+        let key = client.login_qr_generate().await.unwrap();
+        eprintln!("1. Key: {key}");
+        
+        // Step 2: Check (should be 801 = waiting)
+        let result = client.login_qr_check(&key).await;
+        eprintln!("2. Check result: {result:?}");
+        assert!(result.is_ok(), "Check should return Ok, got: {result:?}");
+        assert!(result.unwrap().is_none(), "Should be waiting (None)");
+        
+        eprintln!("Full flow OK!");
+    }
+}

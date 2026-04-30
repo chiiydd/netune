@@ -19,7 +19,15 @@ use app::App;
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt::init();
+    // Log to file (stderr is hidden by TUI alternate screen)
+    let log_file = std::fs::File::create("/tmp/netune.log").expect("create log file");
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_writer(log_file)
+        .init();
 
     // Setup terminal
     enable_raw_mode()?;
