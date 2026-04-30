@@ -1,7 +1,4 @@
-//! Login page — phone number + password form.
-//!
-//! A single mode with two fields (Phone / Password).
-//! Tab switches focus, Enter submits, Esc pops back.
+//! Login page — QR code scan login.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -13,19 +10,23 @@ use ratatui::Frame;
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
 use crate::theme::Theme;
+use crate::widgets::QrCodeWidget;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoginField {
-    Phone,
-    Password,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QrLoginState {
+    WaitingForQr,
+    WaitingScan,
+    Scanned,
+    Success,
+    Expired,
 }
 
 pub struct LoginPage {
-    phone: String,
-    password: String,
-    focus: LoginField,
-    loading: bool,
-    error: Option<String>,
+    pub unikey: Option<String>,
+    pub qr_state: QrLoginState,
+    pub qr_url: Option<String>,
+    pub error: Option<String>,
+    tick_count: u64,
 }
 
 impl Default for LoginPage {
@@ -37,54 +38,50 @@ impl Default for LoginPage {
 impl LoginPage {
     pub fn new() -> Self {
         Self {
-            phone: String::new(),
-            password: String::new(),
-            focus: LoginField::Phone,
-            loading: false,
+            unikey: None,
+            qr_state: QrLoginState::WaitingForQr,
+            qr_url: None,
             error: None,
+            tick_count: 0,
         }
     }
 
-    fn submit(&mut self) -> PageAction {
-        if self.phone.is_empty() {
-            self.error = Some("Phone number is required".into());
-            return PageAction::None;
-        }
-        if self.password.is_empty() {
-            self.error = Some("Password is required".into());
-            return PageAction::None;
-        }
+    /// Called when a new QR key is received.
+    pub fn set_qr_key(&mut self, unikey: String) {
+        self.qr_url = Some(format!(
+            "https://music.163.com/login?codekey={unikey}&callback=close"
+        ));
+        self.unikey = Some(unikey);
+        self.qr_state = QrLoginState::WaitingScan;
         self.error = None;
-        self.loading = true;
-        PageAction::Login {
-            phone: self.phone.clone(),
-            password: self.password.clone(),
-        }
     }
 
-    /// Set the loading state.
-    pub fn set_loading(&mut self, loading: bool) {
-        self.loading = loading;
-    }
-
-    /// Show an error message.
-    pub fn set_error(&mut self, msg: String) {
-        self.error = Some(msg);
-        self.loading = false;
+    /// Called when QR scan state changes to scanned/confirming.
+    pub fn set_scanned(&mut self) {
+        self.qr_state = QrLoginState::Scanned;
     }
 
     /// Called on successful login.
     pub fn set_success(&mut self) {
-        self.loading = false;
-        self.error = None;
+        self.qr_state = QrLoginState::Success;
+    }
+
+    /// Called when QR code expires.
+    pub fn set_expired(&mut self, msg: String) {
+        self.qr_state = QrLoginState::Expired;
+        self.error = Some(msg);
+    }
+
+    /// Called on API error.
+    pub fn set_error(&mut self, msg: String) {
+        self.error = Some(msg);
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        // Center a card: ~40 wide, ~10 tall (content rows + borders).
-        let card_w = 42.min(area.width.saturating_sub(4));
-        let card_h = 12.min(area.height.saturating_sub(2));
+        let card_w = 40.min(area.width.saturating_sub(4));
+        let card_h = 24.min(area.height.saturating_sub(2));
 
         let outer = Layout::default()
             .direction(Direction::Vertical)
@@ -109,7 +106,6 @@ impl LoginPage {
     }
 
     fn render_card(&self, f: &mut Frame, area: Rect) {
-        // Clear background behind card.
         f.render_widget(Clear, area);
 
         let block = Block::default()
@@ -117,7 +113,7 @@ impl LoginPage {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Theme::ACCENT))
             .title(Span::styled(
-                " Login ",
+                " QR Login ",
                 Style::default()
                     .fg(Theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
@@ -126,109 +122,61 @@ impl LoginPage {
         let inner = block.inner(area);
         f.render_widget(block, area);
 
-        // Split inner area: title-line, phone input, password input, error, spacer.
+        // Layout: QR area + spacer + status text + hint
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // phone label
-                Constraint::Length(1), // phone input
+                Constraint::Min(1),    // QR code
                 Constraint::Length(1), // spacer
-                Constraint::Length(1), // password label
-                Constraint::Length(1), // password input
-                Constraint::Min(0),    // flex
-                Constraint::Length(1), // error / hint
+                Constraint::Length(1), // status
+                Constraint::Length(1), // hint
             ])
             .split(inner);
 
-        // ── Phone field ─────────────────────────────────────────────────────
-        let phone_style = if self.focus == LoginField::Phone {
-            Style::default()
-                .fg(Theme::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Theme::FG_DIM)
+        // ── QR Code ──────────────────────────────────────────────────────
+        if let Some(ref url) = self.qr_url {
+            let qr_widget = QrCodeWidget::new(url);
+            f.render_widget(qr_widget, rows[0]);
+        }
+
+        // ── Status text ──────────────────────────────────────────────────
+        let (status_text, status_color) = match &self.qr_state {
+            QrLoginState::WaitingForQr => ("正在获取二维码...".to_string(), Theme::WARNING),
+            QrLoginState::WaitingScan => {
+                ("请使用网易云音乐 App 扫码".to_string(), Theme::FG)
+            }
+            QrLoginState::Scanned => {
+                ("已扫码，请在手机上确认".to_string(), Theme::INFO)
+            }
+            QrLoginState::Success => ("登录成功!".to_string(), Theme::SUCCESS),
+            QrLoginState::Expired => {
+                let msg = self
+                    .error
+                    .as_deref()
+                    .unwrap_or("二维码已过期，按 R 重新获取");
+                (msg.to_string(), Theme::DANGER)
+            }
         };
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled("  Phone", phone_style))),
-            rows[0],
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {status_text}"),
+                Style::default().fg(status_color),
+            ))),
+            rows[2],
         );
 
-        let phone_cursor = if self.focus == LoginField::Phone {
-            "▏"
-        } else {
-            ""
-        };
-        let phone_border_color = if self.focus == LoginField::Phone {
-            Theme::ACCENT
-        } else {
-            Theme::ACCENT_DIM
-        };
-        let phone_block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(phone_border_color));
-        let phone_text = Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(&self.phone, Style::default().fg(Theme::FG)),
-            Span::styled(phone_cursor, Style::default().fg(Theme::ACCENT)),
-        ]))
-        .block(phone_block);
-        f.render_widget(phone_text, rows[1]);
-
-        // ── Password field ──────────────────────────────────────────────────
-        let pw_style = if self.focus == LoginField::Password {
-            Style::default()
-                .fg(Theme::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Theme::FG_DIM)
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled("  Password", pw_style))),
-            rows[3],
-        );
-
-        let masked: String = self.password.chars().map(|_| '*').collect();
-        let pw_cursor = if self.focus == LoginField::Password {
-            "▏"
-        } else {
-            ""
-        };
-        let pw_border_color = if self.focus == LoginField::Password {
-            Theme::ACCENT
-        } else {
-            Theme::ACCENT_DIM
-        };
-        let pw_block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(pw_border_color));
-        let pw_text = Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(masked, Style::default().fg(Theme::FG)),
-            Span::styled(pw_cursor, Style::default().fg(Theme::ACCENT)),
-        ]))
-        .block(pw_block);
-        f.render_widget(pw_text, rows[4]);
-
-        // ── Error / status line ─────────────────────────────────────────────
-        let status = if let Some(ref err) = self.error {
-            Line::from(Span::styled(
-                format!("  ✘ {err}"),
-                Style::default().fg(Theme::DANGER),
-            ))
-        } else if self.loading {
-            Line::from(Span::styled(
-                "  Logging in…",
-                Style::default().fg(Theme::WARNING),
-            ))
-        } else {
-            Line::from(Span::styled(
-                "  Tab: switch  Enter: submit  Esc: back",
-                Style::default().fg(Theme::MUTED),
-            ))
-        };
-        f.render_widget(Paragraph::new(status), rows[6]);
+        // ── Error line (if not in expired state) ─────────────────────────
+        if let Some(ref err) = self.error {
+            if self.qr_state != QrLoginState::Expired {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("  ✘ {err}"),
+                        Style::default().fg(Theme::DANGER),
+                    ))),
+                    rows[3],
+                );
+            }
+        }
     }
 
     // ── Events ──────────────────────────────────────────────────────────────
@@ -242,68 +190,62 @@ impl LoginPage {
         }
 
         match k.code {
-            KeyCode::Esc => return PageAction::Pop,
-            KeyCode::Tab => {
-                self.focus = match self.focus {
-                    LoginField::Phone => LoginField::Password,
-                    LoginField::Password => LoginField::Phone,
-                };
+            KeyCode::Esc => PageAction::Pop,
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.qr_state = QrLoginState::WaitingForQr;
+                self.qr_url = None;
+                self.unikey = None;
                 self.error = None;
+                PageAction::QrRefresh
             }
-            KeyCode::Enter => {
-                return self.submit();
-            }
-            KeyCode::Backspace => {
-                match self.focus {
-                    LoginField::Phone => {
-                        self.phone.pop();
-                    }
-                    LoginField::Password => {
-                        self.password.pop();
-                    }
-                }
-                self.error = None;
-            }
-            KeyCode::Char(c) => {
-                match self.focus {
-                    LoginField::Phone => self.phone.push(c),
-                    LoginField::Password => self.password.push(c),
-                }
-                self.error = None;
-            }
-            _ => {}
+            _ => PageAction::None,
         }
-        PageAction::None
+    }
+
+    // ── Tick ────────────────────────────────────────────────────────────────
+
+    pub fn tick(&mut self) -> PageAction {
+        self.tick_count = self.tick_count.wrapping_add(1);
+        // Poll every ~2 seconds (120 ticks at ~60 Hz / 100ms poll).
+        if self.tick_count % 120 == 0
+            && matches!(
+                self.qr_state,
+                QrLoginState::WaitingScan | QrLoginState::Scanned
+            )
+        {
+            PageAction::QrCheckPoll
+        } else {
+            PageAction::None
+        }
     }
 
     // ── Chrome contract ─────────────────────────────────────────────────────
 
     pub fn mode(&self) -> (String, Color) {
-        if self.loading {
-            ("LOADING".into(), Theme::MODE_LOADING)
-        } else {
-            ("LOGIN".into(), Theme::MODE_NORMAL)
-        }
+        let color = match self.qr_state {
+            QrLoginState::WaitingForQr => Theme::MODE_LOADING,
+            QrLoginState::WaitingScan => Theme::MODE_NORMAL,
+            QrLoginState::Scanned => Theme::INFO,
+            QrLoginState::Success => Theme::SUCCESS,
+            QrLoginState::Expired => Theme::DANGER,
+        };
+        ("QR LOGIN".into(), color)
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
-        if self.phone.is_empty() {
-            vec![Span::styled(
-                "not logged in",
-                Style::default().fg(Theme::MUTED),
-            )]
-        } else {
-            vec![
-                Span::styled("phone: ", Style::default().fg(Theme::MUTED)),
-                Span::styled(self.phone.clone(), Theme::accent_bold()),
-            ]
-        }
+        let text = match &self.qr_state {
+            QrLoginState::WaitingForQr => "获取中",
+            QrLoginState::WaitingScan => "等待扫码",
+            QrLoginState::Scanned => "已扫码",
+            QrLoginState::Success => "已登录",
+            QrLoginState::Expired => "已过期",
+        };
+        vec![Span::styled(text.to_string(), Style::default().fg(Theme::MUTED))]
     }
 
     pub fn hints(&self) -> Vec<KeyHint> {
         vec![
-            KeyHint::new("Tab", "field"),
-            KeyHint::new("⏎", "login"),
+            KeyHint::new("R", "refresh"),
             KeyHint::new("Esc", "back"),
         ]
     }

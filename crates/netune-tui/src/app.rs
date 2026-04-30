@@ -168,13 +168,37 @@ impl App {
         }
     }
 
+    // ── QR Login helpers ──────────────────────────────────────────────
+
+    /// Generate a new QR code for the login page.
+    async fn do_qr_refresh(&mut self) {
+        let Some(Page::Login(lp)) = self.page_stack.last_mut() else {
+            return;
+        };
+        let Some(ref client) = self.api_client else {
+            lp.set_error("No API client configured".into());
+            return;
+        };
+        match client.login_qr_generate().await {
+            Ok(unikey) => {
+                tracing::info!("QR code generated");
+                lp.set_qr_key(unikey);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "QR generate failed");
+                lp.set_error(e.to_string());
+            }
+        }
+    }
+
     // ── Tick ────────────────────────────────────────────────────────────
 
-    fn tick(&mut self) {
+    fn tick(&mut self) -> PageAction {
         self.sync_player_state();
-        // Also tick the active page (e.g. PlayerPage simulation fallback).
         if let Some(page) = self.page_stack.last_mut() {
-            page.tick();
+            page.tick()
+        } else {
+            PageAction::None
         }
     }
 
@@ -207,7 +231,10 @@ impl App {
             })?;
 
             if !event::poll(Duration::from_millis(100))? {
-                self.tick();
+                let tick_action = self.tick();
+                if !matches!(tick_action, PageAction::None) {
+                    self.apply_action(tick_action).await;
+                }
                 continue;
             }
 
@@ -254,7 +281,14 @@ impl App {
         match action {
             PageAction::None => {}
             PageAction::Quit => self.should_quit = true,
-            PageAction::Push(page) => self.page_stack.push(page),
+            PageAction::Push(page) => {
+                let is_login = matches!(page, Page::Login(_));
+                self.page_stack.push(page);
+                // Auto-generate QR code when login page opens.
+                if is_login {
+                    self.do_qr_refresh().await;
+                }
+            }
             PageAction::Pop => {
                 if self.page_stack.len() > 1 {
                     self.page_stack.pop();
@@ -268,24 +302,46 @@ impl App {
                 }
             }
 
-            // ── Login ───────────────────────────────────────────────────
-            PageAction::Login { phone, password } => {
+            // ── QR Login: generate new QR code ──────────────────────────
+            PageAction::QrRefresh => {
+                self.do_qr_refresh().await;
+            }
+
+            // ── QR Login: poll scan status ──────────────────────────────
+            PageAction::QrCheckPoll => {
                 let Some(Page::Login(lp)) = self.page_stack.last_mut() else {
                     return;
                 };
-                let Some(ref client) = self.api_client else {
-                    lp.set_error("No API client configured".into());
+                let Some(ref unikey) = lp.unikey.clone() else {
                     return;
                 };
-                match client.login_phone(&phone, &password).await {
-                    Ok(profile) => {
-                        tracing::info!(nickname = %profile.nickname, uid = profile.uid, "Login succeeded");
+                let Some(ref client) = self.api_client else {
+                    return;
+                };
+                match client.login_qr_check(&unikey).await {
+                    Ok(Some(profile)) => {
+                        tracing::info!(nickname = %profile.nickname, uid = profile.uid, "QR login succeeded");
                         lp.set_success();
                         self.user = Some(profile);
+                        // Navigate to home after short delay.
+                        self.page_stack.clear();
+                        self.page_stack.push(Page::home());
+                    }
+                    Ok(None) => {
+                        // Still waiting — state is managed by the tick logic.
+                        // If we got Ok(None) and it wasn't an error, it could be
+                        // 801 (waiting) or 802 (scanned). We can't distinguish
+                        // from the trait, so we treat both as "waiting".
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "Login failed");
-                        lp.set_error(e.to_string());
+                        let msg = e.to_string();
+                        if msg.contains("expired") || msg.contains("800") {
+                            tracing::info!("QR code expired");
+                            lp.set_expired(msg);
+                        } else {
+                            tracing::warn!(error = %e, "QR check error");
+                            lp.set_error(msg);
+                        }
                     }
                 }
             }

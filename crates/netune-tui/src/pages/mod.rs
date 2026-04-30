@@ -33,8 +33,10 @@ pub enum PageAction {
     Replace(Page),
 
     // ── Cross-page actions (handled by App) ────────────────────────────
-    /// Login page submits credentials.
-    Login { phone: String, password: String },
+    /// QR login: poll scan status.
+    QrCheckPoll,
+    /// QR login: refresh QR code.
+    QrRefresh,
     /// Search page submits a query.
     Search(String),
     /// Play a specific song (from search results or playlist tracks).
@@ -91,10 +93,11 @@ impl Page {
         }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> PageAction {
         match self {
-            Page::Player(p) => p.tick(),
-            _ => {}
+            Page::Login(p) => p.tick(),
+            Page::Player(p) => { p.tick(); PageAction::None }
+            _ => PageAction::None,
         }
     }
 

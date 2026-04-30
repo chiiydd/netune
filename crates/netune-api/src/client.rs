@@ -32,6 +32,55 @@ impl NeteaseApiClient {
         }
     }
 
+    /// Send a request and return the raw deserialized response.
+    async fn inner_request<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &serde_json::Value,
+    ) -> std::result::Result<T, ApiError> {
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
+            .map_err(|e| ApiError::Message(e.to_string()))?;
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .map_err(|e| ApiError::Message(e.to_string()))?;
+        resp.json()
+            .await
+            .map_err(|e| ApiError::Message(e.to_string()))
+    }
+
+    /// Send a request, check the code, and extract the inner data.
+    async fn request<D: InnerData + serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &serde_json::Value,
+    ) -> std::result::Result<D::Output, ApiError> {
+        let resp: D = self.inner_request(path, params).await?;
+        resp.into_data()
+    }
+
+    /// Send a paginated request and return items with pagination metadata.
+    async fn pagination<T, D: InnerData<Output = T> + PaginationInfo + serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &serde_json::Value,
+        offset: u32,
+        limit: u32,
+    ) -> std::result::Result<PaginationResult<T>, ApiError> {
+        let resp: D = self.inner_request(path, params).await?;
+        let total = resp.total();
+        let items = resp.into_data()?;
+        Ok(PaginationResult {
+            items,
+            offset,
+            limit,
+            total,
+        })
+    }
+
     /// Helper: convert an `ApiTrack` into a core `Song`.
     fn track_to_song(t: ApiTrack) -> Song {
         let (album_id, album_name, cover_url) = match t.al {
@@ -69,88 +118,11 @@ impl NeteaseClient for NeteaseApiClient {
         &LOGGED_OUT
     }
 
-    async fn login_phone(&self, phone: &str, password: &str) -> Result<UserProfile> {
-        let body = serde_json::json!({
-            "phone": phone,
-            "password": password,
-            "countrycode": "86"
-        });
-        let params = crypto::encrypt_linuxapi(&body.to_string())
-            .map_err(|e| netune_core::NetuneError::Auth(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}/weapi/login/cellphone", self.base_url))
-            .form(&[("params", &params)])
-            .send()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiLoginResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Auth(
-                result.msg.unwrap_or_default(),
-            ));
-        }
-        let profile = result
-            .profile
-            .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
-        Ok(UserProfile {
-            uid: profile.user_id,
-            nickname: profile.nickname,
-            avatar_url: profile.avatar_url,
-        })
-    }
-
-    async fn login_email(&self, email: &str, password: &str) -> Result<UserProfile> {
-        let body = serde_json::json!({
-            "username": email,
-            "password": password,
-            "rememberLogin": "true"
-        });
-        let params = crypto::encrypt_linuxapi(&body.to_string())
-            .map_err(|e| netune_core::NetuneError::Auth(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}/weapi/login", self.base_url))
-            .form(&[("params", &params)])
-            .send()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiLoginResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Auth(
-                result.msg.unwrap_or_default(),
-            ));
-        }
-        let profile = result
-            .profile
-            .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
-        Ok(UserProfile {
-            uid: profile.user_id,
-            nickname: profile.nickname,
-            avatar_url: profile.avatar_url,
-        })
-    }
-
     async fn login_qr_generate(&self) -> Result<String> {
         let path = "/weapi/login/qrcode/unikey";
         let params = serde_json::json!({ "type": 1 });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiQrKeyResponse = resp
-            .json()
+        let result: ApiQrKeyResponse = self
+            .inner_request(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
         if result.code != 200 || result.unikey.is_empty() {
@@ -165,22 +137,12 @@ impl NeteaseClient for NeteaseApiClient {
     async fn login_qr_check(&self, key: &str) -> Result<Option<UserProfile>> {
         let path = "/weapi/login/qrcode/client/login";
         let params = serde_json::json!({ "key": key, "type": 1 });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiQrCheckResponse = resp
-            .json()
+        let result: ApiQrCheckResponse = self
+            .inner_request(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
         match result.code {
             803 => {
-                // Success — profile should be present
                 let profile = result
                     .profile
                     .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
@@ -201,12 +163,8 @@ impl NeteaseClient for NeteaseApiClient {
     async fn logout(&self) -> Result<()> {
         let path = "/weapi/logout";
         let params = serde_json::json!({});
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        self.http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let _: serde_json::Value = self
+            .inner_request(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
         Ok(())
@@ -219,27 +177,10 @@ impl NeteaseClient for NeteaseApiClient {
             "limit": 30,
             "offset": 0
         });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let playlists = self
+            .request::<ApiUserPlaylistsResponse>(path, &params)
             .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiUserPlaylistsResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "user_playlists failed: code {}",
-                result.code
-            )));
-        }
-        let playlists = result
-            .playlist
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?
             .into_iter()
             .map(|p| Playlist {
                 id: p.id,
@@ -262,28 +203,10 @@ impl NeteaseClient for NeteaseApiClient {
             "id": playlist_id,
             "n": 100000
         });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let playlist = self
+            .request::<ApiPlaylistResponse>(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiPlaylistResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "playlist_detail failed: code {}",
-                result.code
-            )));
-        }
-        let playlist = result
-            .playlist
-            .ok_or_else(|| netune_core::NetuneError::Network("no playlist data".into()))?;
         let songs = playlist
             .tracks
             .into_iter()
@@ -294,70 +217,29 @@ impl NeteaseClient for NeteaseApiClient {
 
     async fn search_songs(&self, keyword: &str, page: u32, size: u32) -> Result<SearchResult> {
         let path = "/weapi/cloudsearch/get/web";
+        let offset = page * size;
         let params = serde_json::json!({
             "s": keyword,
             "type": 1,
-            "offset": page * size,
+            "offset": offset,
             "limit": size,
             "total": true
         });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let result = self
+            .pagination::<ApiSearchResult, ApiSearchResponse>(path, &params, offset, size)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiSearchResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "search failed: code {}",
-                result.code
-            )));
-        }
-        let search_result = result.result.unwrap_or(ApiSearchResult {
-            songs: vec![],
-            song_count: 0,
-        });
-        let songs: Vec<Song> = search_result
+        let has_more = result.has_more();
+        let songs: Vec<Song> = result
+            .items
             .songs
             .into_iter()
-            .map(|t| {
-                let (album_id, album_name, cover_url) = match t.al {
-                    Some(al) => (al.id, al.name, al.pic_url),
-                    None => (0, String::new(), None),
-                };
-                Song {
-                    id: t.id,
-                    name: t.name,
-                    artists: t
-                        .ar
-                        .into_iter()
-                        .map(|a| Artist {
-                            id: a.id,
-                            name: a.name,
-                        })
-                        .collect(),
-                    album: Album {
-                        id: album_id,
-                        name: album_name,
-                        cover_url,
-                    },
-                    duration: t.dt,
-                    quality: QualityLevel::ExHigh,
-                }
-            })
+            .map(Self::track_to_song)
             .collect();
-        let total = search_result.song_count;
         Ok(SearchResult {
             songs,
-            total,
-            has_more: ((page + 1) * size) < total,
+            total: result.total,
+            has_more,
         })
     }
 
@@ -367,27 +249,11 @@ impl NeteaseClient for NeteaseApiClient {
             "ids": [song_id],
             "br": quality.bitrate()
         });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let data = self
+            .request::<ApiSongUrlResponse>(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiSongUrlResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "song_url failed: code {}",
-                result.code
-            )));
-        }
-        let song_url = result
-            .data
+        let song_url = data
             .into_iter()
             .find(|d| d.id == song_id)
             .and_then(|d| d.url)
@@ -402,20 +268,10 @@ impl NeteaseClient for NeteaseApiClient {
             "lv": -1,
             "tv": -1
         });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let result: ApiLyricResponse = self
+            .inner_request(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiLyricResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-
         let lines = result
             .lrc
             .map(|lrc| parse_lrc(&lrc.lyric))
@@ -427,55 +283,22 @@ impl NeteaseClient for NeteaseApiClient {
     async fn daily_recommend(&self) -> Result<DailyRecommend> {
         let path = "/weapi/v2/discovery/recommend/songs";
         let params = serde_json::json!({ "total": true, "limit": 30 });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let data = self
+            .request::<ApiDailyRecommendResponse>(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiDailyRecommendResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "daily_recommend failed: code {}",
-                result.code
-            )));
-        }
-        let songs = result
-            .data
-            .map(|d| d.daily_songs.into_iter().map(Self::track_to_song).collect())
-            .unwrap_or_default();
+        let songs = data.daily_songs.into_iter().map(Self::track_to_song).collect();
         Ok(DailyRecommend { songs })
     }
 
     async fn personal_fm(&self) -> Result<Vec<Song>> {
         let path = "/weapi/v6/personal/fm";
         let params = serde_json::json!({ "limit": 30 });
-        let encrypted = crypto::encrypt_eapi(&params.to_string(), path)
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let resp = self
-            .http
-            .post(format!("{}{path}", self.base_url))
-            .form(&[("params", &encrypted)])
-            .send()
+        let tracks = self
+            .request::<ApiPersonalFmResponse>(path, &params)
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let result: ApiPersonalFmResponse = resp
-            .json()
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        if result.code != 200 {
-            return Err(netune_core::NetuneError::Network(format!(
-                "personal_fm failed: code {}",
-                result.code
-            )));
-        }
-        let songs = result.data.into_iter().map(Self::track_to_song).collect();
+        let songs = tracks.into_iter().map(Self::track_to_song).collect();
         Ok(songs)
     }
 }

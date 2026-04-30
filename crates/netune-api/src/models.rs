@@ -2,12 +2,55 @@
 
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
-pub struct ApiLoginResponse {
-    pub code: i32,
-    pub profile: Option<ApiProfile>,
-    pub msg: Option<String>,
+// ─── Error & helpers ──────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum ApiError {
+    Code(i32),
+    Message(String),
 }
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::Code(c) => write!(f, "API error code {c}"),
+            ApiError::Message(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// Extracts the inner data payload from a response envelope.
+pub trait InnerData {
+    type Output;
+    fn into_data(self) -> Result<Self::Output, ApiError>;
+}
+
+/// Pagination metadata extracted from a response.
+pub trait PaginationInfo {
+    fn total(&self) -> u32;
+    fn has_more(&self, offset: u32, limit: u32) -> bool {
+        (offset + limit) < self.total()
+    }
+}
+
+/// Result of a paginated API request.
+#[derive(Debug)]
+pub struct PaginationResult<T> {
+    pub items: T,
+    pub offset: u32,
+    pub limit: u32,
+    pub total: u32,
+}
+
+impl<T> PaginationResult<T> {
+    pub fn has_more(&self) -> bool {
+        (self.offset + self.limit) < self.total
+    }
+}
+
+// ─── Response types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,6 +206,83 @@ pub struct ApiPersonalFmResponse {
     pub code: i32,
     #[serde(default)]
     pub data: Vec<ApiTrack>,
+}
+
+// ─── InnerData impls ─────────────────────────────────────────────────────────
+
+impl InnerData for ApiSearchResponse {
+    type Output = ApiSearchResult;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        self.result.ok_or_else(|| ApiError::Message("no search result".into()))
+    }
+}
+
+impl PaginationInfo for ApiSearchResponse {
+    fn total(&self) -> u32 {
+        self.result.as_ref().map_or(0, |r| r.song_count)
+    }
+}
+
+impl InnerData for ApiSongUrlResponse {
+    type Output = Vec<ApiSongUrl>;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        Ok(self.data)
+    }
+}
+
+impl InnerData for ApiPlaylistResponse {
+    type Output = ApiPlaylist;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        self.playlist.ok_or_else(|| ApiError::Message("no playlist data".into()))
+    }
+}
+
+impl InnerData for ApiUserPlaylistsResponse {
+    type Output = Vec<ApiUserPlaylist>;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        Ok(self.playlist)
+    }
+}
+
+impl PaginationInfo for ApiUserPlaylistsResponse {
+    fn total(&self) -> u32 {
+        self.playlist.len() as u32
+    }
+    fn has_more(&self, _offset: u32, _limit: u32) -> bool {
+        false
+    }
+}
+
+impl InnerData for ApiDailyRecommendResponse {
+    type Output = ApiDailyRecommendData;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        self.data.ok_or_else(|| ApiError::Message("no daily recommend data".into()))
+    }
+}
+
+impl InnerData for ApiPersonalFmResponse {
+    type Output = Vec<ApiTrack>;
+    fn into_data(self) -> Result<Self::Output, ApiError> {
+        if self.code != 200 {
+            return Err(ApiError::Code(self.code));
+        }
+        Ok(self.data)
+    }
 }
 
 #[cfg(test)]

@@ -11,12 +11,6 @@ pub trait NeteaseClient: Send + Sync {
     /// Current login state.
     fn login_state(&self) -> &LoginState;
 
-    /// Login with phone number and password.
-    async fn login_phone(&self, phone: &str, password: &str) -> Result<UserProfile>;
-
-    /// Login with email and password.
-    async fn login_email(&self, email: &str, password: &str) -> Result<UserProfile>;
-
     /// Generate a QR code login key.
     async fn login_qr_generate(&self) -> Result<String>;
 
@@ -105,14 +99,6 @@ mod tests {
     impl NeteaseClient for MockNeteaseClient {
         fn login_state(&self) -> &LoginState {
             &self.login_state
-        }
-
-        async fn login_phone(&self, _phone: &str, _password: &str) -> Result<UserProfile> {
-            Err(NetuneError::Auth("mock".into()))
-        }
-
-        async fn login_email(&self, _email: &str, _password: &str) -> Result<UserProfile> {
-            Err(NetuneError::Auth("mock".into()))
         }
 
         async fn login_qr_generate(&self) -> Result<String> {
