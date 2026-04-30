@@ -440,6 +440,24 @@ impl App {
                     }
                 }
             }
+
+            // ── Fetch daily recommend ──────────────────────────────────
+            PageAction::FetchDailyRecommend => {
+                let Some(ref client) = self.api_client else {
+                    return;
+                };
+                match client.daily_recommend().await {
+                    Ok(recommend) => {
+                        self.play_queue.load(recommend.songs.clone());
+                        let mut pp = super::pages::playlist::PlaylistPage::new();
+                        pp.set_tracks(recommend.songs);
+                        self.page_stack.push(Page::Playlist(pp));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to fetch daily recommend");
+                    }
+                }
+            }
         }
     }
 }

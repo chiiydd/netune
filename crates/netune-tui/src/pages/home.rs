@@ -272,7 +272,7 @@ impl HomePage {
             }
             MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
             MenuAction::DailyRecommend => {
-                PageAction::Push(super::Page::Playlist(super::PlaylistPage::new()))
+                PageAction::FetchDailyRecommend
             }
             MenuAction::PersonalFm => {
                 PageAction::Push(super::Page::Player(super::PlayerPage::new()))

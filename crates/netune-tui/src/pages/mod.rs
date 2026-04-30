@@ -45,6 +45,8 @@ pub enum PageAction {
     PlayQueue(Vec<Song>),
     /// Fetch playlist detail tracks from API.
     FetchPlaylistDetail(u64),
+    /// Fetch daily recommend songs from API.
+    FetchDailyRecommend,
     /// Toggle pause/resume on the audio player.
     TogglePause,
     /// Seek forward/backward by N seconds.
