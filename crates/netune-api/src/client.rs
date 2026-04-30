@@ -45,9 +45,22 @@ impl NeteaseApiClient {
     /// Fetch the current logged-in user profile via /api/user/account.
     /// This uses the session cookies (MUSIC_U) set during QR login.
     async fn fetch_current_user_profile(&self) -> std::result::Result<UserProfile, ApiError> {
-        let path = "/api/user/account";
-        let params = serde_json::json!({});
-        let resp: ApiUserAccountResponse = self.inner_request(path, &params).await?;
+        // NOTE: /api/user/account requires POST (not GET via inner_request)
+        let url = format!("{}/api/user/account", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("Referer", &self.base_url)
+            .send()
+            .await
+            .map_err(|e| ApiError::Message(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| ApiError::Message(e.to_string()))?;
+        tracing::debug!(body = %body, "/api/user/account response");
+        let resp: ApiUserAccountResponse =
+            serde_json::from_str(&body).map_err(|e| ApiError::Message(format!("{e}: {body}")))?;
         if resp.code != 200 {
             return Err(ApiError::Code(resp.code));
         }
