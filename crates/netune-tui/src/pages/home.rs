@@ -1,51 +1,230 @@
-//! home page — stub for B组(Claude Code) to implement.
+//! Main menu page — entry point for all features.
+//!
+//! Body is a centered menu list. Top bar and statusline come from
+//! the app chrome (`crate::chrome`).
 
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::text::Span;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 
 use crate::chrome::KeyHint;
 use crate::theme::Theme;
-use crate::pages::PageAction;
+
+use super::PageAction;
+
+/// One row in the home menu — the action it triggers is attached so the
+/// activate logic doesn't depend on the row's index.
+struct MenuItem {
+    label: &'static str,
+    desc: &'static str,
+    action: MenuAction,
+}
+
+#[derive(Clone, Copy)]
+enum MenuAction {
+    Playlists,
+    Search,
+    DailyRecommend,
+    PersonalFm,
+    Login,
+    Settings,
+    Quit,
+}
+
+const MENU_ITEMS: &[MenuItem] = &[
+    MenuItem {
+        label: "My Playlists",
+        desc: "Browse your playlists and collections",
+        action: MenuAction::Playlists,
+    },
+    MenuItem {
+        label: "Search",
+        desc: "Search for songs, albums, and artists",
+        action: MenuAction::Search,
+    },
+    MenuItem {
+        label: "Daily Recommend",
+        desc: "Personalized daily mix for you",
+        action: MenuAction::DailyRecommend,
+    },
+    MenuItem {
+        label: "Personal FM",
+        desc: "Endless radio tailored to your taste",
+        action: MenuAction::PersonalFm,
+    },
+    MenuItem {
+        label: "Login",
+        desc: "Sign in to your Netease account",
+        action: MenuAction::Login,
+    },
+    MenuItem {
+        label: "Settings",
+        desc: "App preferences and configuration",
+        action: MenuAction::Settings,
+    },
+    MenuItem {
+        label: "Quit",
+        desc: "Exit netune",
+        action: MenuAction::Quit,
+    },
+];
 
 pub struct HomePage {
-    // TODO: B组(Claude Code) — add state fields
+    list_state: ListState,
+}
+
+impl Default for HomePage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HomePage {
     pub fn new() -> Self {
-        Self {}
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self { list_state }
     }
 
-    pub fn render(&self, f: &mut Frame, area: Rect) {
-        // TODO: B组(Claude Code) — implement home UI
-        use ratatui::widgets::{Block, Borders, Paragraph};
-        use ratatui::text::Line;
-        let block = Block::default()
-            .title(" home ")
-            .borders(Borders::ALL);
-        let text = Paragraph::new(Line::from("TODO: B组(Claude Code) 待实现"))
-            .block(block);
-        f.render_widget(text, area);
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
+        let menu_h = (MENU_ITEMS.len() * 2 + 2) as u16;
+        let menu_w = 64u16.min(area.width.saturating_sub(4));
+        let pad_v = area.height.saturating_sub(menu_h) / 2;
+        let pad_h = (area.width.saturating_sub(menu_w)) / 2;
+
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(pad_v),
+                Constraint::Length(menu_h),
+                Constraint::Min(0),
+            ])
+            .split(area);
+        let h = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(pad_h),
+                Constraint::Length(menu_w),
+                Constraint::Min(0),
+            ])
+            .split(v[1]);
+
+        let items: Vec<ListItem> = MENU_ITEMS
+            .iter()
+            .map(|item| {
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            item.label.to_owned(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(item.desc, Style::default().fg(Theme::MUTED)),
+                    ]),
+                ])
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .title(Span::styled(
+                        " ♫ Main menu ",
+                        Style::default()
+                            .fg(Theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            )
+            .highlight_style(Theme::selection())
+            .highlight_symbol("▶ ");
+
+        f.render_stateful_widget(list, h[1], &mut self.list_state);
     }
 
-    pub fn handle_event(&self, _evt: &Event) -> PageAction {
-        // TODO: B组(Claude Code) — handle keyboard events
+    pub fn handle_event(&mut self, evt: &Event) -> PageAction {
+        let Event::Key(k) = evt else {
+            return PageAction::None;
+        };
+        if k.kind != KeyEventKind::Press {
+            return PageAction::None;
+        }
+        match k.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state.select(Some((i + 1) % MENU_ITEMS.len()));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state
+                    .select(Some(i.checked_sub(1).unwrap_or(MENU_ITEMS.len() - 1)));
+            }
+            KeyCode::Enter | KeyCode::Char('l') => return self.activate(),
+            KeyCode::Char('q') | KeyCode::Esc => return PageAction::Quit,
+            _ => {}
+        }
         PageAction::None
     }
 
+    fn activate(&self) -> PageAction {
+        let action = MENU_ITEMS
+            .get(self.list_state.selected().unwrap_or(0))
+            .map(|item| item.action)
+            .unwrap_or(MenuAction::Quit);
+        match action {
+            MenuAction::Playlists => PageAction::Push(super::Page::Playlist(
+                super::PlaylistPage::new(),
+            )),
+            MenuAction::Search => PageAction::Push(super::Page::Search(
+                super::SearchPage::new(),
+            )),
+            MenuAction::DailyRecommend => PageAction::Push(super::Page::Playlist(
+                super::PlaylistPage::new(),
+            )),
+            MenuAction::PersonalFm => PageAction::Push(super::Page::Player(
+                super::PlayerPage::new(),
+            )),
+            MenuAction::Login => PageAction::Push(super::Page::Login(
+                super::LoginPage::new(),
+            )),
+            MenuAction::Settings => PageAction::Push(super::Page::Settings(
+                super::SettingsPage::new(),
+            )),
+            MenuAction::Quit => PageAction::Quit,
+        }
+    }
+
+    // ── Chrome contract ──────────────────────────────────────────────────────
+
     pub fn mode(&self) -> (String, Color) {
-        ("Normal".to_string(), Theme::MODE_NORMAL)
+        ("MENU".into(), Theme::MODE_NORMAL)
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
-        vec![]
+        let label = MENU_ITEMS
+            .get(self.list_state.selected().unwrap_or(0))
+            .map(|item| item.label)
+            .unwrap_or("");
+        vec![Span::styled(
+            label.to_owned(),
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )]
     }
 
     pub fn hints(&self) -> Vec<KeyHint> {
         vec![
+            KeyHint::new("j/k", "move"),
+            KeyHint::new("⏎", "select"),
             KeyHint::new("q", "quit"),
         ]
     }

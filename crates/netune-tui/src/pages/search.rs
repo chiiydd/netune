@@ -1,52 +1,269 @@
-//! search page — stub for B组(Claude Code) to implement.
+//! Search page — query input + results list.
+//!
+//! Two modes:
+//! - **Input**: typing a search query, Enter triggers search.
+//! - **Normal**: navigating results with j/k.
 
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::text::Span;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
+
+use netune_core::models::Song;
 
 use crate::chrome::KeyHint;
 use crate::theme::Theme;
 use crate::pages::PageAction;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchMode {
+    Input,
+    Normal,
+}
+
 pub struct SearchPage {
-    // TODO: B组(Claude Code) — add state fields
+    mode: SearchMode,
+    query: String,
+    results: Vec<Song>,
+    list_state: ListState,
+}
+
+impl Default for SearchPage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SearchPage {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            mode: SearchMode::Input,
+            query: String::new(),
+            results: Vec::new(),
+            list_state: ListState::default(),
+        }
     }
 
-    pub fn render(&self, f: &mut Frame, area: Rect) {
-        // TODO: B组(Claude Code) — implement search UI
-        use ratatui::widgets::{Block, Borders, Paragraph};
-        use ratatui::text::Line;
+    fn search(&mut self) {
+        if self.query.is_empty() {
+            return;
+        }
+        // TODO: call NeteaseClient::search_songs() when API is wired up.
+        // For now the results stay empty — the UI is ready to receive them.
+        self.list_state.select(if self.results.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
+    }
+
+    // ── Rendering ───────────────────────────────────────────────────────────
+
+    pub fn render(&mut self, f: &mut Frame, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+            ])
+            .split(area);
+
+        self.render_input(f, chunks[0]);
+        self.render_results(f, chunks[1]);
+    }
+
+    fn render_input(&self, f: &mut Frame, area: Rect) {
+        let border_color = if self.mode == SearchMode::Input {
+            Theme::ACCENT
+        } else {
+            Theme::ACCENT_DIM
+        };
+
         let block = Block::default()
-            .title(" search ")
-            .borders(Borders::ALL);
-        let text = Paragraph::new(Line::from("TODO: B组(Claude Code) 待实现"))
-            .block(block);
-        f.render_widget(text, area);
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title(Span::styled(
+                " Search ",
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+        let cursor = if self.mode == SearchMode::Input { "▏" } else { "" };
+        let input = Paragraph::new(Line::from(vec![
+            Span::styled(&self.query, Style::default().fg(Theme::FG)),
+            Span::styled(cursor, Style::default().fg(Theme::ACCENT)),
+        ]))
+        .block(block);
+
+        f.render_widget(input, area);
     }
 
-    pub fn handle_event(&self, _evt: &Event) -> PageAction {
-        // TODO: B组(Claude Code) — handle keyboard events
+    fn render_results(&mut self, f: &mut Frame, area: Rect) {
+        let items: Vec<ListItem> = if self.results.is_empty() {
+            let msg = if self.query.is_empty() {
+                "Type a query and press Enter"
+            } else {
+                "No results"
+            };
+            vec![ListItem::new(Line::from(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(Theme::MUTED),
+            )))]
+        } else {
+            self.results
+                .iter()
+                .map(|song| {
+                    let artists = song
+                        .artists
+                        .iter()
+                        .map(|a| a.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ListItem::new(vec![
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(
+                                &song.name,
+                                Style::default().add_modifier(Modifier::BOLD),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::raw("    "),
+                            Span::styled(
+                                format!("{artists} — {}", song.album.name),
+                                Style::default().fg(Theme::MUTED),
+                            ),
+                        ]),
+                    ])
+                })
+                .collect()
+        };
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .title(Span::styled(
+                        " Results ",
+                        Style::default()
+                            .fg(Theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            )
+            .highlight_style(Theme::selection())
+            .highlight_symbol("▶ ");
+
+        f.render_stateful_widget(list, area, &mut self.list_state);
+    }
+
+    // ── Events ──────────────────────────────────────────────────────────────
+
+    pub fn handle_event(&mut self, evt: &Event) -> PageAction {
+        let Event::Key(k) = evt else {
+            return PageAction::None;
+        };
+        if k.kind != KeyEventKind::Press {
+            return PageAction::None;
+        }
+
+        match self.mode {
+            SearchMode::Input => self.handle_input(k.code),
+            SearchMode::Normal => self.handle_normal(k.code),
+        }
+    }
+
+    fn handle_input(&mut self, code: KeyCode) -> PageAction {
+        match code {
+            KeyCode::Esc => {
+                self.mode = SearchMode::Normal;
+            }
+            KeyCode::Enter => {
+                self.search();
+                if !self.results.is_empty() {
+                    self.mode = SearchMode::Normal;
+                }
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+            }
+            _ => {}
+        }
         PageAction::None
     }
 
+    fn handle_normal(&mut self, code: KeyCode) -> PageAction {
+        let len = self.results.len();
+        match code {
+            KeyCode::Esc | KeyCode::Char('i') => {
+                self.mode = SearchMode::Input;
+            }
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state.select(Some((i + 1) % len));
+            }
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                let i = self.list_state.selected().unwrap_or(0);
+                self.list_state
+                    .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
+            }
+            KeyCode::Enter if len > 0 => {
+                // TODO: play selected song via PageAction when player is wired up.
+            }
+            _ => {}
+        }
+        PageAction::None
+    }
+
+    // ── Chrome contract ─────────────────────────────────────────────────────
+
     pub fn mode(&self) -> (String, Color) {
-        ("Normal".to_string(), Theme::MODE_NORMAL)
+        match self.mode {
+            SearchMode::Input => ("INPUT".into(), Theme::MODE_SEARCH),
+            SearchMode::Normal => ("NORMAL".into(), Theme::MODE_NORMAL),
+        }
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
-        vec![]
+        if self.query.is_empty() {
+            vec![Span::styled(
+                "empty query",
+                Style::default().fg(Theme::MUTED),
+            )]
+        } else {
+            vec![
+                Span::styled("\"", Style::default().fg(Theme::MUTED)),
+                Span::styled(self.query.clone(), Theme::accent_bold()),
+                Span::styled("\"", Style::default().fg(Theme::MUTED)),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{} results", self.results.len()),
+                    Style::default().fg(Theme::MUTED),
+                ),
+            ]
+        }
     }
 
     pub fn hints(&self) -> Vec<KeyHint> {
-        vec![
-            KeyHint::new("q", "quit"),
-        ]
+        match self.mode {
+            SearchMode::Input => vec![
+                KeyHint::new("⏎", "search"),
+                KeyHint::new("Esc", "navigate"),
+            ],
+            SearchMode::Normal => vec![
+                KeyHint::new("j/k", "move"),
+                KeyHint::new("⏎", "play"),
+                KeyHint::new("i", "edit"),
+                KeyHint::new("Esc", "back"),
+            ],
+        }
     }
 }
