@@ -61,6 +61,7 @@ md-5       = "0.10"
 hex        = "0.4"
 base64     = "0.22"
 getrandom  = "0.2"
+rsa        = "0.9"
 
 # Logging
 tracing            = "0.1"

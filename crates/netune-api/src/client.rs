@@ -16,17 +16,20 @@ use crate::models::*;
 /// HTTP-based Netease Cloud Music API client.
 pub struct NeteaseApiClient {
     http: Client,
+    cookie_jar: Arc<reqwest::cookie::Jar>,
     login_state: Arc<RwLock<LoginState>>,
     base_url: String,
 }
 
 impl NeteaseApiClient {
     pub fn new() -> Self {
+        let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
         Self {
             http: Client::builder()
-                .cookie_store(true)
+                .cookie_provider(Arc::clone(&cookie_jar))
                 .build()
                 .expect("Failed to build HTTP client"),
+            cookie_jar,
             login_state: Arc::new(RwLock::new(LoginState::LoggedOut)),
             base_url: "https://music.163.com".to_string(),
         }
@@ -123,11 +126,13 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_generate(&self) -> Result<String> {
-        let path = "/api/login/qrcode/unikey";
+        let path = "/weapi/login/qrcode/unikey";
+        let params = serde_json::json!({"type": 1, "noCheckToken": true});
+        let (enc_params, enc_sec_key) = crypto::weapi_encrypt(&params)?;
         let resp = self
             .http
             .post(format!("{}{path}", self.base_url))
-            .form(&[("type", "1")])
+            .form(&[("params", &enc_params), ("encSecKey", &enc_sec_key)])
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
@@ -147,11 +152,31 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_check(&self, key: &str) -> Result<Option<UserProfile>> {
-        let path = "/api/login/qrcode/client/login";
+        let path = "/weapi/login/qrcode/client/login";
+
+        // Inject cookies before checking: os=pc and random NMTID
+        let url: reqwest::Url = self
+            .base_url
+            .parse()
+            .map_err(|e| netune_core::NetuneError::Network(format!("url parse: {e}")))?;
+        self.cookie_jar.add_cookie_str("os=pc", &url);
+        let mut nmtid_buf = [0u8; 16];
+        getrandom::getrandom(&mut nmtid_buf)
+            .map_err(|e| netune_core::NetuneError::Crypto(e.to_string()))?;
+        let nmtid = hex::encode(nmtid_buf);
+        self.cookie_jar
+            .add_cookie_str(&format!("NMTID={nmtid}"), &url);
+
+        let params = serde_json::json!({
+            "type": 1,
+            "noCheckToken": true,
+            "key": key,
+        });
+        let (enc_params, enc_sec_key) = crypto::weapi_encrypt(&params)?;
         let resp = self
             .http
             .post(format!("{}{path}", self.base_url))
-            .form(&[("key", key), ("type", "1")])
+            .form(&[("params", &enc_params), ("encSecKey", &enc_sec_key)])
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
