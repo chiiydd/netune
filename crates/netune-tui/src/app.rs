@@ -5,6 +5,8 @@
 //! they want; `apply_action` executes those actions (API calls, playback
 //! control) and feeds results back into the appropriate pages.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use color_eyre::Result;
@@ -17,12 +19,15 @@ use netune_api::NeteaseApiClient;
 use netune_core::config::Config;
 use netune_core::models::{Song, UserProfile};
 use netune_core::traits::{AudioPlayer, NeteaseClient};
-use netune_player::{NetunePlayer, PlayQueue};
+use netune_player::{NetunePlayer, PlayMode, PlayQueue};
 
 use crate::chrome;
 use crate::pages::Page;
 use crate::pages::PageAction;
 use crate::widgets::queue_panel::{QueuePanel, QueuePanelResult};
+
+/// Maximum number of songs to keep in the audio pre-cache.
+const AUDIO_CACHE_MAX: usize = 3;
 
 pub struct App {
     /// Page navigation stack — last element is the active page.
@@ -30,7 +35,7 @@ pub struct App {
     /// Whether the app should exit.
     pub should_quit: bool,
     /// Netease API client (created at startup).
-    api_client: Option<NeteaseApiClient>,
+    api_client: Option<Arc<NeteaseApiClient>>,
     /// Audio player (created at startup).
     player: Option<NetunePlayer>,
     /// Current playback queue.
@@ -41,6 +46,9 @@ pub struct App {
     user: Option<UserProfile>,
     /// Floating queue panel overlay (None = hidden).
     queue_panel: Option<QueuePanel>,
+    /// Pre-fetched audio data: song_id → audio bytes.
+    /// Used to eliminate download delay when switching songs.
+    audio_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
 }
 
 impl App {
@@ -48,12 +56,13 @@ impl App {
         Self {
             page_stack: vec![Page::home()],
             should_quit: false,
-            api_client: Some(NeteaseApiClient::new()),
+            api_client: Some(Arc::new(NeteaseApiClient::new())),
             player: Some(NetunePlayer::new()),
             play_queue: PlayQueue::new(),
             config: Config::default(),
             user: None,
             queue_panel: None,
+            audio_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -61,7 +70,8 @@ impl App {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    /// Play a song: fetch its streaming URL, start playback, update pages.
+    /// Play a song: check cache or fetch its streaming URL, start playback,
+    /// update pages, and trigger pre-cache for the next song.
     async fn do_play_song(&mut self, song: Song) {
         let quality = self.config.quality;
 
@@ -74,71 +84,176 @@ impl App {
             }
         }
 
+        // Try to take pre-cached audio bytes for this song.
+        let cached_bytes = self
+            .audio_cache
+            .lock()
+            .ok()
+            .and_then(|mut cache| cache.remove(&song.id));
+
         let Some(ref client) = self.api_client else {
             tracing::warn!("Cannot play song — no API client");
             return;
         };
 
-        // Fetch streaming URL and lyrics concurrently to avoid UI freeze.
-        let url_fut = client.song_url(song.id, quality);
-        let lyrics_fut = client.lyrics(song.id);
-        let (url_result, lyrics_result) = tokio::join!(url_fut, lyrics_fut);
+        if let Some(bytes) = cached_bytes {
+            // ── Cache hit: play instantly from bytes ──────────────────
+            tracing::info!(song_id = song.id, "Playing from audio cache");
+            if let Some(ref player) = self.player {
+                if let Err(e) = player.play_from_bytes(bytes) {
+                    tracing::warn!(error = %e, "Playback from cache failed");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            break;
+                        }
+                    }
+                    return;
+                }
+                player.set_volume(self.config.volume);
+            }
 
-        let url = match url_result {
-            Ok(u) => u,
-            Err(e) => {
-                tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
-                for page in &mut self.page_stack {
-                    if let Page::Player(pp) = page {
-                        pp.set_loading(false);
-                        break;
+            // Only lyrics need fetching — URL is not required.
+            match client.lyrics(song.id).await {
+                Ok(lyrics) => {
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            pp.set_lyrics(lyrics);
+                            break;
+                        }
                     }
                 }
-                return;
-            }
-        };
-
-        // Start playback.
-        if let Some(ref player) = self.player {
-            if let Err(e) = player.play(&url).await {
-                tracing::warn!(error = %e, "Playback failed");
-                for page in &mut self.page_stack {
-                    if let Page::Player(pp) = page {
-                        pp.set_loading(false);
-                        break;
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to fetch lyrics");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            break;
+                        }
                     }
                 }
-                return;
             }
-            player.set_volume(self.config.volume);
+        } else {
+            // ── Cache miss: fetch URL + lyrics concurrently ──────────
+            let url_fut = client.song_url(song.id, quality);
+            let lyrics_fut = client.lyrics(song.id);
+            let (url_result, lyrics_result) = tokio::join!(url_fut, lyrics_fut);
+
+            let url = match url_result {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            break;
+                        }
+                    }
+                    return;
+                }
+            };
+
+            // Start playback (downloads the full audio then plays).
+            if let Some(ref player) = self.player {
+                if let Err(e) = player.play(&url).await {
+                    tracing::warn!(error = %e, "Playback failed");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            break;
+                        }
+                    }
+                    return;
+                }
+                player.set_volume(self.config.volume);
+            }
+
+            // Clear loading state and set lyrics.
+            match lyrics_result {
+                Ok(lyrics) => {
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            pp.set_lyrics(lyrics);
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to fetch lyrics");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_loading(false);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
-        // Update queue: replace with single song and set as current.
-        self.play_queue.load(vec![song.clone()]);
-
-        // Clear loading state and set lyrics.
-        match lyrics_result {
-            Ok(lyrics) => {
-                for page in &mut self.page_stack {
-                    if let Page::Player(pp) = page {
-                        pp.set_loading(false);
-                        pp.set_lyrics(lyrics);
-                        break;
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to fetch lyrics");
-                for page in &mut self.page_stack {
-                    if let Page::Player(pp) = page {
-                        pp.set_loading(false);
-                        break;
-                    }
-                }
-            }
-        }
+        // Trigger background pre-cache for the next song in the queue.
+        self.pre_cache_next();
 
         tracing::info!("Now playing");
+    }
+
+    /// Pre-cache the next song in the queue so it plays instantly when reached.
+    fn pre_cache_next(&self) {
+        let Some(ref client) = self.api_client else {
+            return;
+        };
+        let songs = self.play_queue.songs();
+        let idx = self.play_queue.current_index();
+        if songs.is_empty() || idx + 1 >= songs.len() {
+            return;
+        }
+        let next_song = &songs[idx + 1];
+
+        // Already cached — nothing to do.
+        if let Ok(cache) = self.audio_cache.lock() {
+            if cache.contains_key(&next_song.id) {
+                return;
+            }
+        }
+
+        let song_id = next_song.id;
+        let quality = self.config.quality;
+        let client = Arc::clone(client);
+        let cache = Arc::clone(&self.audio_cache);
+
+        tokio::spawn(async move {
+            let url = match client.song_url(song_id, quality).await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(error = %e, song_id, "Pre-cache: failed to get song URL");
+                    return;
+                }
+            };
+            let bytes = match reqwest::get(&url).await {
+                Ok(resp) => match resp.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, song_id, "Pre-cache: failed to read response");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, song_id, "Pre-cache: failed to download");
+                    return;
+                }
+            };
+            if let Ok(mut cache) = cache.lock() {
+                if cache.len() >= AUDIO_CACHE_MAX {
+                    // Evict the oldest entry (first key).
+                    if let Some(oldest) = cache.keys().next().copied() {
+                        cache.remove(&oldest);
+                    }
+                }
+                cache.insert(song_id, bytes);
+                tracing::info!(song_id, "Pre-cache: cached next song");
+            }
+        });
     }
 
     /// Jump to the next song in the queue.

@@ -48,6 +48,9 @@ pub trait AudioPlayer: Send + Sync {
     /// Play a song by streaming URL.
     async fn play(&self, url: &str) -> Result<()>;
 
+    /// Play a song from pre-fetched audio bytes (skips download).
+    fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()>;
+
     /// Pause playback.
     fn pause(&self);
 
@@ -158,6 +161,11 @@ mod tests {
     #[async_trait]
     impl AudioPlayer for MockAudioPlayer {
         async fn play(&self, _url: &str) -> Result<()> {
+            self.playing.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn play_from_bytes(&self, _bytes: Vec<u8>) -> Result<()> {
             self.playing.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }

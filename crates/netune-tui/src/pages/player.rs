@@ -363,7 +363,7 @@ impl PlayerPage {
             KeyCode::Down => {
                 PageAction::SetVolume(self.volume.saturating_sub(5))
             }
-            KeyCode::Char('Q') => PageAction::ToggleQueuePanel,
+            KeyCode::Tab => PageAction::ToggleQueuePanel,
             _ => PageAction::None,
         }
     }

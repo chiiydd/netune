@@ -100,6 +100,54 @@ impl AudioPlayer for NetunePlayer {
         Ok(())
     }
 
+    fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
+        // Create decoder directly from pre-fetched bytes (skip download).
+        let cursor = Cursor::new(bytes);
+        let decoder = Decoder::new(cursor)
+            .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
+
+        // Read total duration before consuming the decoder.
+        let duration = decoder
+            .total_duration()
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        // Create a device sink to the default audio output.
+        let device_sink = DeviceSinkBuilder::open_default_sink()
+            .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+
+        // Create a player connected to the mixer.
+        let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
+
+        // Apply the previously-set volume (if any).
+        let prev_volume = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
+        if let Some(vol) = prev_volume {
+            rodio_player.set_volume(vol);
+        }
+
+        // Append the decoder source — starts playback immediately.
+        rodio_player.append(decoder);
+
+        // Store the new playback state.
+        {
+            let mut state = self.state.lock().map_err(|e| {
+                NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
+            })?;
+            *state = Some(PlaybackState {
+                _device_sink: device_sink,
+                player: rodio_player,
+                duration,
+            });
+        }
+
+        tracing::debug!(duration, "Playback started from cached bytes");
+        Ok(())
+    }
+
     fn pause(&self) {
         if let Ok(state) = self.state.lock()
             && let Some(ref ps) = *state

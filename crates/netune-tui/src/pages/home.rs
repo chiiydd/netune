@@ -255,7 +255,7 @@ impl HomePage {
             }
             KeyCode::Enter | KeyCode::Char('l') => return self.activate(),
             KeyCode::Char('q') | KeyCode::Esc => return PageAction::Quit,
-            KeyCode::Char('Q') => return PageAction::ToggleQueuePanel,
+            KeyCode::Tab => return PageAction::ToggleQueuePanel,
             _ => {}
         }
         PageAction::None
