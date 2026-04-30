@@ -278,6 +278,10 @@ impl NeteaseClient for NeteaseApiClient {
             800 => Err(netune_core::NetuneError::Auth(
                 result.message.unwrap_or_else(|| "QR code expired".into()),
             )),
+            // -462 = anti-bot CAPTCHA verification required
+            -462 => Err(netune_core::NetuneError::Auth(
+                result.message.unwrap_or_else(|| "需要验证码，请稍后重试".into()),
+            )),
             // 801 = waiting for scan, 802 = scanned/confirming
             _ => Ok(None),
         }
