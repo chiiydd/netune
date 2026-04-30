@@ -22,6 +22,7 @@ use netune_player::{NetunePlayer, PlayQueue};
 use crate::chrome;
 use crate::pages::Page;
 use crate::pages::PageAction;
+use crate::widgets::queue_panel::{QueuePanel, QueuePanelResult};
 
 pub struct App {
     /// Page navigation stack — last element is the active page.
@@ -38,6 +39,8 @@ pub struct App {
     config: Config,
     /// Logged-in user profile (if authenticated).
     user: Option<UserProfile>,
+    /// Floating queue panel overlay (None = hidden).
+    queue_panel: Option<QueuePanel>,
 }
 
 impl App {
@@ -50,6 +53,7 @@ impl App {
             play_queue: PlayQueue::new(),
             config: Config::default(),
             user: None,
+            queue_panel: None,
         }
     }
 
@@ -170,6 +174,7 @@ impl App {
         if !found {
             let mut pp = crate::pages::player::PlayerPage::new();
             pp.set_song(song);
+            pp.set_play_mode(self.play_queue.mode());
             self.page_stack.push(Page::Player(pp));
         }
     }
@@ -251,6 +256,36 @@ impl App {
     // ── Main loop ───────────────────────────────────────────────────────
 
     pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+        // Auto-login from saved cookies.
+        {
+            let cookie_path = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".netune")
+                .join("cookies.txt");
+            if cookie_path.exists() {
+                if let Some(ref client) = self.api_client {
+                    if client.load_cookies(&cookie_path).unwrap_or(false) {
+                        match client.check_login().await {
+                            Ok(Some(profile)) => {
+                                tracing::info!(nickname = %profile.nickname, "Auto-login from saved cookies");
+                                self.user = Some(profile.clone());
+                                for page in &mut self.page_stack {
+                                    if let Page::Home(hp) = page {
+                                        hp.set_user(Some(profile));
+                                        break;
+                                    }
+                                }
+                                self.fetch_user_playlists().await;
+                            }
+                            _ => {
+                                tracing::info!("Saved cookies invalid, need re-login");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         loop {
             terminal.draw(|f| {
                 if let Some(page) = self.page_stack.last_mut() {
@@ -273,6 +308,13 @@ impl App {
                     let context = page.context();
                     let hints = page.hints();
                     chrome::render_statusline(f, chunks[2], &mode, mode_color, context, &hints);
+
+                    // Render queue panel overlay on top if open.
+                    if let Some(ref qp) = self.queue_panel {
+                        let full_area = f.area();
+                        let songs = self.play_queue.songs();
+                        qp.render(f, full_area, songs);
+                    }
                 }
             })?;
 
@@ -306,7 +348,30 @@ impl App {
                 break;
             }
 
-            let action = if let Some(page) = self.page_stack.last_mut() {
+            let action = if self.queue_panel.is_some() {
+                // Queue panel is open — forward events to it first.
+                let result = self
+                    .queue_panel
+                    .as_mut()
+                    .unwrap()
+                    .handle_event(&evt);
+                match result {
+                    QueuePanelResult::Close => {
+                        self.queue_panel = None;
+                        PageAction::None
+                    }
+                    QueuePanelResult::JumpTo(idx) => {
+                        self.queue_panel = None;
+                        PageAction::JumpToQueueItem(idx)
+                    }
+                    QueuePanelResult::NotHandled => {
+                        // Queue panel didn't handle it — still consume the
+                        // event so it doesn't leak to the underlying page
+                        // (except Ctrl+C which is handled above).
+                        PageAction::None
+                    }
+                }
+            } else if let Some(page) = self.page_stack.last_mut() {
                 page.handle_event(&evt).await
             } else {
                 PageAction::None
@@ -369,6 +434,19 @@ impl App {
                         tracing::info!(nickname = %profile.nickname, uid = profile.uid, "QR login succeeded");
                         lp.set_success();
                         self.user = Some(profile.clone());
+                        // Save cookies for future auto-login.
+                        if let Some(ref client) = self.api_client {
+                            let cookie_path = dirs::home_dir()
+                                .unwrap_or_default()
+                                .join(".netune")
+                                .join("cookies.txt");
+                            if let Some(parent) = cookie_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            if let Err(e) = client.save_cookies(&cookie_path) {
+                                tracing::warn!(error = %e, "Failed to save cookies");
+                            }
+                        }
                         // Navigate to home and update user info.
                         self.page_stack.clear();
                         let mut home = crate::pages::home::HomePage::new();
@@ -486,6 +564,19 @@ impl App {
                 }
             }
 
+            // ── Cycle play mode ───────────────────────────────────────
+            PageAction::CyclePlayMode => {
+                self.play_queue.cycle_mode();
+                let mode = self.play_queue.mode();
+                tracing::info!(?mode, "Play mode changed");
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_play_mode(mode);
+                        break;
+                    }
+                }
+            }
+
             // ── Fetch daily recommend ──────────────────────────────────
             PageAction::FetchDailyRecommend => {
                 let Some(ref client) = self.api_client else {
@@ -500,6 +591,29 @@ impl App {
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to fetch daily recommend");
+                    }
+                }
+            }
+
+            // ── Queue panel toggle ─────────────────────────────────────
+            PageAction::ToggleQueuePanel => {
+                if self.queue_panel.is_some() {
+                    self.queue_panel = None;
+                    tracing::info!("Queue panel closed");
+                } else {
+                    let idx = self.play_queue.current_index();
+                    let total = self.play_queue.len();
+                    self.queue_panel = Some(QueuePanel::new(idx, total));
+                    tracing::info!("Queue panel opened");
+                }
+            }
+
+            // ── Jump to queue item ──────────────────────────────────────
+            PageAction::JumpToQueueItem(index) => {
+                if self.play_queue.jump(index).is_some() {
+                    let song = self.play_queue.current().cloned();
+                    if let Some(song) = song {
+                        self.do_play_song(song).await;
                     }
                 }
             }

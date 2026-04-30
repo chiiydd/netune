@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::Client;
+use reqwest::cookie::CookieStore;
 use tokio::sync::RwLock;
 
 use netune_core::Result;
@@ -34,6 +35,47 @@ impl NeteaseApiClient {
             cookie_jar,
             login_state: Arc::new(RwLock::new(LoginState::LoggedOut)),
             base_url: "https://music.163.com".to_string(),
+        }
+    }
+
+    /// Save cookies to a file for persistence across sessions.
+    pub fn save_cookies(&self, path: &std::path::Path) -> Result<()> {
+        let url: reqwest::Url = self
+            .base_url
+            .parse()
+            .map_err(|e| netune_core::NetuneError::Network(format!("url parse: {e}")))?;
+        if let Some(header_val) = self.cookie_jar.cookies(&url) {
+            let cookie_str = header_val.to_str().unwrap_or("");
+            std::fs::write(path, cookie_str)
+                .map_err(|e| netune_core::NetuneError::Network(format!("save cookies: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Load cookies from a file.
+    pub fn load_cookies(&self, path: &std::path::Path) -> Result<bool> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| netune_core::NetuneError::Network(format!("read cookies: {e}")))?;
+        let content = content.trim();
+        if content.is_empty() {
+            return Ok(false);
+        }
+        let url: reqwest::Url = self
+            .base_url
+            .parse()
+            .map_err(|e| netune_core::NetuneError::Network(format!("url parse: {e}")))?;
+        self.cookie_jar.add_cookie_str(content, &url);
+        Ok(true)
+    }
+
+    /// Check if saved cookies are still valid. Returns user profile if logged in.
+    pub async fn check_login(&self) -> Result<Option<UserProfile>> {
+        match self.fetch_current_user_profile().await {
+            Ok(profile) => {
+                *self.login_state.write().await = LoginState::LoggedIn(profile.clone());
+                Ok(Some(profile))
+            }
+            Err(_) => Ok(None),
         }
     }
 

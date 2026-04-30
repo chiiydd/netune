@@ -53,6 +53,12 @@ pub enum PageAction {
     Seek(f64),
     /// Set volume (0-100).
     SetVolume(u16),
+    /// Toggle queue panel visibility.
+    ToggleQueuePanel,
+    /// Jump to a specific song in the queue by index.
+    JumpToQueueItem(usize),
+    /// Cycle play mode (Sequential → LoopAll → LoopOne → Shuffle).
+    CyclePlayMode,
 }
 
 /// Settings page focus fields.

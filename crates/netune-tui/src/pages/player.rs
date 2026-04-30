@@ -16,6 +16,7 @@ use ratatui::Frame;
 
 use netune_core::models::Song;
 use netune_core::models::Lyrics;
+use netune_player::PlayMode;
 
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
@@ -31,6 +32,7 @@ pub struct PlayerPage {
     lyrics: Option<Lyrics>,
     current_lyric_idx: usize,
     volume: u16,
+    play_mode: PlayMode,
 }
 
 impl Default for PlayerPage {
@@ -51,6 +53,7 @@ impl PlayerPage {
             lyrics: None,
             current_lyric_idx: 0,
             volume: 80,
+            play_mode: PlayMode::Sequential,
         }
     }
 
@@ -90,6 +93,11 @@ impl PlayerPage {
     /// Set loading state (shown while audio is buffering).
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+    }
+
+    /// Set the current play mode (for UI display).
+    pub fn set_play_mode(&mut self, mode: PlayMode) {
+        self.play_mode = mode;
     }
 
     /// Get the current song (for context display).
@@ -264,11 +272,16 @@ impl PlayerPage {
     fn render_controls(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Length(2)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(1),
+                Constraint::Length(2),
+            ])
             .split(area);
 
         self.render_progress(f, chunks[0]);
-        self.render_volume(f, chunks[1]);
+        self.render_play_mode(f, chunks[1]);
+        self.render_volume(f, chunks[2]);
     }
 
     fn render_progress(&self, f: &mut Frame, area: Rect) {
@@ -288,6 +301,24 @@ impl PlayerPage {
             .label(label);
 
         f.render_widget(gauge, area);
+    }
+
+    fn render_play_mode(&self, f: &mut Frame, area: Rect) {
+        let (icon, label, color) = match self.play_mode {
+            PlayMode::Sequential => ("▶▷", "顺序", Theme::MUTED),
+            PlayMode::LoopAll => ("🔁", "全部循环", Theme::ACCENT),
+            PlayMode::LoopOne => ("🔂", "单曲循环", Theme::WARNING),
+            PlayMode::Shuffle => ("🔀", "随机", Theme::SUCCESS),
+        };
+
+        let line = Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(icon, Style::default().fg(color)),
+            Span::styled(" ", Style::default()),
+            Span::styled(label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        ]);
+
+        f.render_widget(Paragraph::new(line), area);
     }
 
     fn render_volume(&self, f: &mut Frame, area: Rect) {
@@ -319,6 +350,7 @@ impl PlayerPage {
         match k.code {
             KeyCode::Esc | KeyCode::Char('q') => PageAction::Pop,
             KeyCode::Char(' ') => PageAction::TogglePause,
+            KeyCode::Char('m') => PageAction::CyclePlayMode,
             KeyCode::Left => {
                 PageAction::Seek(-5.0)
             }
@@ -331,6 +363,7 @@ impl PlayerPage {
             KeyCode::Down => {
                 PageAction::SetVolume(self.volume.saturating_sub(5))
             }
+            KeyCode::Char('Q') => PageAction::ToggleQueuePanel,
             _ => PageAction::None,
         }
     }
@@ -407,6 +440,7 @@ impl PlayerPage {
             KeyHint::new("Space", "pause"),
             KeyHint::new("←/→", "seek"),
             KeyHint::new("↑/↓", "vol"),
+            KeyHint::new("m", "mode"),
             KeyHint::new("Esc", "back"),
         ]
     }
