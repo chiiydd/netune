@@ -4,11 +4,11 @@
 //! - **Tracks**: browse songs in the selected playlist (name + artist + duration).
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+use ratatui::Frame;
 
 use netune_core::models::{Playlist, Song};
 
@@ -52,7 +52,7 @@ impl PlaylistPage {
         }
     }
 
-    /// Called when the API provides playlists (wired up later).
+    /// Called when the API provides playlists.
     pub fn set_playlists(&mut self, playlists: Vec<Playlist>) {
         self.playlists = playlists;
         if self.playlists.is_empty() {
@@ -62,21 +62,38 @@ impl PlaylistPage {
         }
     }
 
-    fn open_playlist(&mut self) {
-        let Some(idx) = self.list_state.selected() else {
-            return;
-        };
-        if self.playlists.get(idx).is_none() {
-            return;
-        }
-        self.selected_playlist = Some(idx);
-        // TODO: fetch tracks from API when wired up.
-        self.tracks.clear();
+    /// Set tracks for the currently selected playlist.
+    pub fn set_tracks(&mut self, tracks: Vec<Song>) {
+        self.tracks = tracks;
         self.tracks_state = ListState::default();
         if !self.tracks.is_empty() {
             self.tracks_state.select(Some(0));
         }
         self.view = PageView::Tracks;
+    }
+
+    /// Get the ID of the currently selected playlist.
+    pub fn selected_playlist_id(&self) -> Option<u64> {
+        let idx = self.list_state.selected()?;
+        self.playlists.get(idx).map(|p| p.id)
+    }
+
+    /// Get the currently selected track.
+    pub fn selected_track(&self) -> Option<&Song> {
+        let idx = self.tracks_state.selected()?;
+        self.tracks.get(idx)
+    }
+
+    fn open_playlist(&mut self) -> PageAction {
+        let Some(idx) = self.list_state.selected() else {
+            return PageAction::None;
+        };
+        if let Some(playlist) = self.playlists.get(idx) {
+            self.selected_playlist = Some(idx);
+            let playlist_id = playlist.id;
+            return PageAction::FetchPlaylistDetail(playlist_id);
+        }
+        PageAction::None
     }
 
     fn back_to_list(&mut self) {
@@ -238,7 +255,7 @@ impl PlaylistPage {
                     .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
             }
             KeyCode::Enter if len > 0 => {
-                self.open_playlist();
+                return self.open_playlist();
             }
             KeyCode::Esc | KeyCode::Char('h') => return PageAction::Pop,
             _ => {}
@@ -259,7 +276,9 @@ impl PlaylistPage {
                     .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
             }
             KeyCode::Enter if len > 0 => {
-                // TODO: play selected track via PageAction when player is wired up.
+                if let Some(song) = self.selected_track().cloned() {
+                    return PageAction::PlaySong(song);
+                }
             }
             KeyCode::Esc | KeyCode::Char('h') => {
                 self.back_to_list();

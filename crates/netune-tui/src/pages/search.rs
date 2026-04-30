@@ -5,11 +5,11 @@
 //! - **Normal**: navigating results with j/k.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::Frame;
 
 use netune_core::models::Song;
 
@@ -46,17 +46,26 @@ impl SearchPage {
         }
     }
 
-    fn search(&mut self) {
-        if self.query.is_empty() {
-            return;
-        }
-        // TODO: call NeteaseClient::search_songs() when API is wired up.
-        // For now the results stay empty — the UI is ready to receive them.
+    /// Get the current query.
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Set search results (called by App after API response).
+    pub fn set_results(&mut self, results: Vec<Song>) {
+        self.results = results;
         self.list_state.select(if self.results.is_empty() {
             None
         } else {
             Some(0)
         });
+        self.mode = SearchMode::Normal;
+    }
+
+    /// Get the currently selected song.
+    pub fn selected_song(&self) -> Option<&Song> {
+        let idx = self.list_state.selected()?;
+        self.results.get(idx)
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -182,9 +191,8 @@ impl SearchPage {
                 self.mode = SearchMode::Normal;
             }
             KeyCode::Enter => {
-                self.search();
-                if !self.results.is_empty() {
-                    self.mode = SearchMode::Normal;
+                if !self.query.is_empty() {
+                    return PageAction::Search(self.query.clone());
                 }
             }
             KeyCode::Backspace => {
@@ -214,7 +222,9 @@ impl SearchPage {
                     .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
             }
             KeyCode::Enter if len > 0 => {
-                // TODO: play selected song via PageAction when player is wired up.
+                if let Some(song) = self.selected_song().cloned() {
+                    return PageAction::PlaySong(song);
+                }
             }
             _ => {}
         }

@@ -35,7 +35,7 @@ impl NeteaseApiClient {
     /// Helper: convert an `ApiTrack` into a core `Song`.
     fn track_to_song(t: ApiTrack) -> Song {
         let (album_id, album_name, cover_url) = match t.al {
-            Some(al) => (al.id, al.name, al.picUrl),
+            Some(al) => (al.id, al.name, al.pic_url),
             None => (0, String::new(), None),
         };
         Song {
@@ -97,9 +97,9 @@ impl NeteaseClient for NeteaseApiClient {
             .profile
             .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
         Ok(UserProfile {
-            uid: profile.userId,
+            uid: profile.user_id,
             nickname: profile.nickname,
-            avatar_url: profile.avatarUrl,
+            avatar_url: profile.avatar_url,
         })
     }
 
@@ -131,9 +131,9 @@ impl NeteaseClient for NeteaseApiClient {
             .profile
             .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
         Ok(UserProfile {
-            uid: profile.userId,
+            uid: profile.user_id,
             nickname: profile.nickname,
-            avatar_url: profile.avatarUrl,
+            avatar_url: profile.avatar_url,
         })
     }
 
@@ -185,9 +185,9 @@ impl NeteaseClient for NeteaseApiClient {
                     .profile
                     .ok_or_else(|| netune_core::NetuneError::Auth("No profile".into()))?;
                 Ok(Some(UserProfile {
-                    uid: profile.userId,
+                    uid: profile.user_id,
                     nickname: profile.nickname,
-                    avatar_url: profile.avatarUrl,
+                    avatar_url: profile.avatar_url,
                 }))
             }
             800 => Err(netune_core::NetuneError::Auth(
@@ -244,12 +244,12 @@ impl NeteaseClient for NeteaseApiClient {
             .map(|p| Playlist {
                 id: p.id,
                 name: p.name,
-                cover_url: p.coverImgUrl,
-                track_count: p.trackCount,
+                cover_url: p.cover_img_url,
+                track_count: p.track_count,
                 creator: p.creator.map(|c| UserProfile {
-                    uid: c.userId,
+                    uid: c.user_id,
                     nickname: c.nickname,
-                    avatar_url: c.avatarUrl,
+                    avatar_url: c.avatar_url,
                 }),
             })
             .collect();
@@ -322,14 +322,14 @@ impl NeteaseClient for NeteaseApiClient {
         }
         let search_result = result.result.unwrap_or(ApiSearchResult {
             songs: vec![],
-            songCount: 0,
+            song_count: 0,
         });
         let songs: Vec<Song> = search_result
             .songs
             .into_iter()
             .map(|t| {
                 let (album_id, album_name, cover_url) = match t.al {
-                    Some(al) => (al.id, al.name, al.picUrl),
+                    Some(al) => (al.id, al.name, al.pic_url),
                     None => (0, String::new(), None),
                 };
                 Song {
@@ -353,7 +353,7 @@ impl NeteaseClient for NeteaseApiClient {
                 }
             })
             .collect();
-        let total = search_result.songCount;
+        let total = search_result.song_count;
         Ok(SearchResult {
             songs,
             total,
@@ -448,7 +448,7 @@ impl NeteaseClient for NeteaseApiClient {
         }
         let songs = result
             .data
-            .map(|d| d.dailySongs.into_iter().map(Self::track_to_song).collect())
+            .map(|d| d.daily_songs.into_iter().map(Self::track_to_song).collect())
             .unwrap_or_default();
         Ok(DailyRecommend { songs })
     }

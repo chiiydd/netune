@@ -10,10 +10,11 @@ pub struct ApiLoginResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiProfile {
-    pub userId: u64,
+    pub user_id: u64,
     pub nickname: String,
-    pub avatarUrl: Option<String>,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,10 +45,11 @@ pub struct ApiPlaylistResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiPlaylist {
     pub id: u64,
     pub name: String,
-    pub trackCount: u32,
+    pub track_count: u32,
     #[serde(default)]
     pub tracks: Vec<ApiTrack>,
 }
@@ -71,10 +73,11 @@ pub struct ApiArtist {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiAlbum {
     pub id: u64,
     pub name: String,
-    pub picUrl: Option<String>,
+    pub pic_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,11 +87,12 @@ pub struct ApiSearchResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiSearchResult {
     #[serde(default)]
     pub songs: Vec<ApiTrack>,
     #[serde(default)]
-    pub songCount: u32,
+    pub song_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,13 +129,14 @@ pub struct ApiUserPlaylistsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiUserPlaylist {
     pub id: u64,
     pub name: String,
     #[serde(default)]
-    pub coverImgUrl: Option<String>,
+    pub cover_img_url: Option<String>,
     #[serde(default)]
-    pub trackCount: u32,
+    pub track_count: u32,
     pub creator: Option<ApiProfile>,
 }
 
@@ -145,9 +150,10 @@ pub struct ApiDailyRecommendResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiDailyRecommendData {
     #[serde(default)]
-    pub dailySongs: Vec<ApiTrack>,
+    pub daily_songs: Vec<ApiTrack>,
 }
 
 // ─── Personal FM ───────────────────────────────────────────────────────────

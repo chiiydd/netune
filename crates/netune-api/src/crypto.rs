@@ -5,7 +5,7 @@
 //! - eapi: AES-128-ECB + MD5 digest
 
 use aes::Aes128;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::KeyInit;
 use base64::Engine;
 use md5::{Digest, Md5};
 use netune_core::Result;

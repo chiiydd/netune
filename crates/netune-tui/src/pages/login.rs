@@ -4,11 +4,11 @@
 //! Tab switches focus, Enter submits, Esc pops back.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::Frame;
 
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
@@ -45,18 +45,38 @@ impl LoginPage {
         }
     }
 
-    fn submit(&mut self) {
+    fn submit(&mut self) -> PageAction {
         if self.phone.is_empty() {
             self.error = Some("Phone number is required".into());
-            return;
+            return PageAction::None;
         }
         if self.password.is_empty() {
             self.error = Some("Password is required".into());
-            return;
+            return PageAction::None;
         }
         self.error = None;
         self.loading = true;
-        // TODO: call NeteaseClient::login() when API is wired up.
+        PageAction::Login {
+            phone: self.phone.clone(),
+            password: self.password.clone(),
+        }
+    }
+
+    /// Set the loading state.
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+    }
+
+    /// Show an error message.
+    pub fn set_error(&mut self, msg: String) {
+        self.error = Some(msg);
+        self.loading = false;
+    }
+
+    /// Called on successful login.
+    pub fn set_success(&mut self) {
+        self.loading = false;
+        self.error = None;
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -231,7 +251,7 @@ impl LoginPage {
                 self.error = None;
             }
             KeyCode::Enter => {
-                self.submit();
+                return self.submit();
             }
             KeyCode::Backspace => {
                 match self.focus {

@@ -8,11 +8,11 @@
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap};
+use ratatui::Frame;
 
 use netune_core::models::Song;
 
@@ -62,10 +62,25 @@ impl PlayerPage {
         self.current_lyric_idx = 0;
     }
 
+    /// Update playback state from the real player.
+    pub fn update_from_player(&mut self, position_secs: f64, duration_secs: f64, is_playing: bool) {
+        self.elapsed = Duration::from_secs_f64(position_secs);
+        if duration_secs > 0.0 {
+            self.duration = Duration::from_secs_f64(duration_secs);
+        }
+        self.is_playing = is_playing;
+        self.update_progress();
+    }
+
     /// Set lyrics lines.
     pub fn set_lyrics(&mut self, lines: Vec<String>) {
         self.lyrics = lines;
         self.current_lyric_idx = 0;
+    }
+
+    /// Get the current song (for context display).
+    pub fn song(&self) -> Option<&Song> {
+        self.song.as_ref()
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────

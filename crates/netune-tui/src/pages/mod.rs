@@ -22,6 +22,8 @@ use self::playlist::PlaylistPage;
 use self::search::SearchPage;
 use self::settings::SettingsPage;
 
+use netune_core::models::Song;
+
 /// Actions a page can return to the app loop.
 pub enum PageAction {
     None,
@@ -29,6 +31,18 @@ pub enum PageAction {
     Push(Page),
     Pop,
     Replace(Page),
+
+    // ── Cross-page actions (handled by App) ────────────────────────────
+    /// Login page submits credentials.
+    Login { phone: String, password: String },
+    /// Search page submits a query.
+    Search(String),
+    /// Play a specific song (from search results or playlist tracks).
+    PlaySong(Song),
+    /// Load playlist tracks and set them as the play queue.
+    PlayQueue(Vec<Song>),
+    /// Fetch playlist detail tracks from API.
+    FetchPlaylistDetail(u64),
 }
 
 /// Settings page focus fields.
