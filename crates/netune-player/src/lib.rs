@@ -4,4 +4,4 @@ pub mod player;
 pub mod queue;
 
 pub use player::NetunePlayer;
-pub use queue::PlayQueue;
+pub use queue::{PlayMode, PlayQueue};

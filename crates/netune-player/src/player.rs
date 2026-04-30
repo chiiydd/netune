@@ -1,89 +1,206 @@
 //! Audio player implementation using rodio.
 
+use std::io::Cursor;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
+use netune_core::error::NetuneError;
 use netune_core::Result;
 use netune_core::traits::AudioPlayer;
 
+/// Holds the rodio playback state for a single track.
+struct PlaybackState {
+    /// Device sink (must stay alive while playing).
+    _device_sink: MixerDeviceSink,
+    /// Rodio player handle — pause / resume / seek / volume control.
+    player: RodioPlayer,
+    /// Total duration reported by the decoder (seconds).
+    duration: f64,
+}
+
 /// rodio-based audio player with streaming support.
 pub struct NetunePlayer {
-    volume: Arc<AtomicU32>, // stored as f32 bits
-    playing: Arc<AtomicBool>,
-    paused: Arc<AtomicBool>,
-    position: Arc<RwLock<f64>>,
-    duration: Arc<RwLock<f64>>,
+    /// Current playback state — `None` when stopped or not yet started.
+    state: Arc<Mutex<Option<PlaybackState>>>,
 }
 
 impl NetunePlayer {
     pub fn new() -> Self {
         Self {
-            volume: Arc::new(AtomicU32::new(0.7f32.to_bits())),
-            playing: Arc::new(AtomicBool::new(false)),
-            paused: Arc::new(AtomicBool::new(false)),
-            position: Arc::new(RwLock::new(0.0)),
-            duration: Arc::new(RwLock::new(0.0)),
+            state: Arc::new(Mutex::new(None)),
         }
+    }
+}
+
+impl Default for NetunePlayer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait]
 impl AudioPlayer for NetunePlayer {
-    async fn play(&self, _url: &str) -> Result<()> {
-        todo!("A组(Codex): 实现 rodio 流式播放")
+    async fn play(&self, url: &str) -> Result<()> {
+        // Download the audio data from the URL.
+        let bytes = reqwest::get(url)
+            .await
+            .map_err(|e| NetuneError::Player(format!("Failed to fetch audio URL: {e}")))?
+            .bytes()
+            .await
+            .map_err(|e| NetuneError::Player(format!("Failed to read audio body: {e}")))?;
+
+        // Create decoder from the downloaded bytes.
+        let cursor = Cursor::new(bytes.to_vec());
+        let decoder = Decoder::new(cursor)
+            .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
+
+        // Read total duration before consuming the decoder.
+        let duration = decoder
+            .total_duration()
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        // Create a device sink to the default audio output.
+        let device_sink = DeviceSinkBuilder::open_default_sink()
+            .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+
+        // Create a player connected to the mixer.
+        let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
+
+        // Apply the previously-set volume (if any).
+        let prev_volume = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
+        if let Some(vol) = prev_volume {
+            rodio_player.set_volume(vol);
+        }
+
+        // Append the decoder source — starts playback immediately.
+        rodio_player.append(decoder);
+
+        // Store the new playback state.
+        {
+            let mut state = self.state.lock().map_err(|e| {
+                NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
+            })?;
+            *state = Some(PlaybackState {
+                _device_sink: device_sink,
+                player: rodio_player,
+                duration,
+            });
+        }
+
+        tracing::debug!(url, duration, "Playback started");
+        Ok(())
     }
 
     fn pause(&self) {
-        todo!("A组(Codex): 实现暂停")
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            ps.player.pause();
+        }
     }
 
     fn resume(&self) {
-        todo!("A组(Codex): 实现恢复")
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            ps.player.play(); // rodio `play()` = resume
+        }
     }
 
     fn toggle_pause(&self) {
-        if self.paused.load(Ordering::Relaxed) {
-            self.resume();
-        } else {
-            self.pause();
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            if ps.player.is_paused() {
+                ps.player.play();
+            } else {
+                ps.player.pause();
+            }
         }
     }
 
     fn stop(&self) {
-        self.playing.store(false, Ordering::Relaxed);
-        self.paused.store(false, Ordering::Relaxed);
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(ref ps) = *state {
+                ps.player.stop();
+            }
+            *state = None;
+        }
     }
 
-    fn seek(&self, _seconds: f64) -> Result<()> {
-        todo!("A组(Codex): 实现跳转")
+    fn seek(&self, seconds: f64) -> Result<()> {
+        let state = self.state.lock().map_err(|e| {
+            NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
+        })?;
+        if let Some(ref ps) = *state {
+            let pos = Duration::from_secs_f64(seconds.max(0.0));
+            ps.player
+                .try_seek(pos)
+                .map_err(|e| NetuneError::Player(format!("Seek failed: {e}")))?;
+        }
+        Ok(())
     }
 
     fn set_volume(&self, volume: f32) {
-        self.volume
-            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        let clamped = volume.clamp(0.0, 1.0);
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            ps.player.set_volume(clamped);
+        }
     }
 
     fn volume(&self) -> f32 {
-        f32::from_bits(self.volume.load(Ordering::Relaxed))
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            return ps.player.volume();
+        }
+        1.0
     }
 
     fn position(&self) -> f64 {
-        // NOTE: Real impl will use tokio::spawn to track position
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            return ps.player.get_pos().as_secs_f64();
+        }
         0.0
     }
 
     fn duration(&self) -> f64 {
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            return ps.duration;
+        }
         0.0
     }
 
     fn is_playing(&self) -> bool {
-        self.playing.load(Ordering::Relaxed)
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            return !ps.player.is_paused();
+        }
+        false
     }
 
     fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
+        if let Ok(state) = self.state.lock()
+            && let Some(ref ps) = *state
+        {
+            return ps.player.is_paused();
+        }
+        false
     }
 }
