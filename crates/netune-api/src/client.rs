@@ -47,9 +47,13 @@ impl NeteaseApiClient {
             .send()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
-        resp.json()
+        let status = resp.status();
+        let body = resp
+            .text()
             .await
-            .map_err(|e| ApiError::Message(e.to_string()))
+            .map_err(|e| ApiError::Message(e.to_string()))?;
+        eprintln!("[{}] {} -> {}...", status, path, &body[..body.len().min(200)]);
+        serde_json::from_str(&body).map_err(|e| ApiError::Message(e.to_string()))
     }
 
     /// Send a request, check the code, and extract the inner data.
@@ -119,11 +123,19 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_generate(&self) -> Result<String> {
-        let path = "/weapi/login/qrcode/unikey";
-        let params = serde_json::json!({ "type": 1 });
-        let result: ApiQrKeyResponse = self
-            .inner_request(path, &params)
+        let path = "/api/login/qrcode/unikey";
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .form(&[("type", "1")])
+            .send()
             .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let result: ApiQrKeyResponse = serde_json::from_str(&body)
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
         if result.code != 200 || result.unikey.is_empty() {
             return Err(netune_core::NetuneError::Network(format!(
@@ -135,11 +147,19 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn login_qr_check(&self, key: &str) -> Result<Option<UserProfile>> {
-        let path = "/weapi/login/qrcode/client/login";
-        let params = serde_json::json!({ "key": key, "type": 1 });
-        let result: ApiQrCheckResponse = self
-            .inner_request(path, &params)
+        let path = "/api/login/qrcode/client/login";
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .form(&[("key", key), ("type", "1")])
+            .send()
             .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let result: ApiQrCheckResponse = serde_json::from_str(&body)
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
         match result.code {
             803 => {
@@ -410,5 +430,123 @@ mod tests {
         assert_eq!(song.album.name, "");
         assert!(song.album.cover_url.is_none());
         assert!(song.artists.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod qr_debug_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_qr_generate_debug() {
+        let client = NeteaseApiClient::new();
+        let params = serde_json::json!({ "type": 1 });
+        let path = "/weapi/login/qrcode/unikey";
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path).unwrap();
+        
+        let resp = client.http
+            .post(format!("{}{}", client.base_url, path))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .unwrap();
+        
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body: {}", &body[..500.min(body.len())]);
+        
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(val) => eprintln!("Parsed: {:#?}", val),
+            Err(e) => eprintln!("Parse error: {}", e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod qr_encrypt_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_different_encryptions() {
+        let client = reqwest::Client::new();
+        let base_url = "https://music.163.com";
+        let params = serde_json::json!({ "type": 1 });
+        let path = "/weapi/login/qrcode/unikey";
+        
+        // Test 1: eapi
+        eprintln!("=== Test 1: eapi ===");
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path).unwrap();
+        let resp = client.post(format!("{}{}", base_url, path))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {}, content: {}", body.len(), &body[..200.min(body.len())]);
+        
+        // Test 2: linuxapi
+        eprintln!("\n=== Test 2: linuxapi ===");
+        let encrypted = crypto::encrypt_linuxapi(&params.to_string()).unwrap();
+        let resp = client.post(format!("{}{}", base_url, path))
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {}, content: {}", body.len(), &body[..200.min(body.len())]);
+        
+        // Test 3: weapi (if available)
+        eprintln!("\n=== Test 3: raw (no encryption) ===");
+        let resp = client.post(format!("{}{}", base_url, path))
+            .form(&[("type", "1")])
+            .send()
+            .await
+            .unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {}, content: {}", body.len(), &body[..200.min(body.len())]);
+    }
+}
+
+#[cfg(test)]
+mod qr_headers_test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_with_headers() {
+        let client = reqwest::Client::new();
+        let base_url = "https://music.163.com";
+        let params = serde_json::json!({ "type": 1 });
+        let path = "/weapi/login/qrcode/unikey";
+        
+        // Test with proper headers
+        eprintln!("=== Test with headers ===");
+        let encrypted = crypto::encrypt_eapi(&params.to_string(), path).unwrap();
+        let resp = client.post(format!("{}{}", base_url, path))
+            .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+            .header("Referer", "https://music.163.com")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&[("params", &encrypted)])
+            .send()
+            .await
+            .unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {}, content: {}", body.len(), &body[..500.min(body.len())]);
+        
+        // Try with different endpoint
+        eprintln!("\n=== Test /api/login/qr/key ===");
+        let resp = client.post(format!("{}/api/login/qr/key", base_url))
+            .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+            .header("Referer", "https://music.163.com")
+            .form(&[("timestamp", chrono::Utc::now().timestamp_millis().to_string())])
+            .send()
+            .await
+            .unwrap();
+        eprintln!("Status: {}", resp.status());
+        let body = resp.text().await.unwrap();
+        eprintln!("Body len: {}, content: {}", body.len(), &body[..500.min(body.len())]);
     }
 }
