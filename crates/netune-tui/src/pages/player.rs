@@ -17,8 +17,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap};
 use netune_core::models::Song;
 
 use crate::chrome::KeyHint;
-use crate::theme::Theme;
 use crate::pages::PageAction;
+use crate::theme::Theme;
 
 pub struct PlayerPage {
     song: Option<Song>,
@@ -96,11 +96,7 @@ impl PlayerPage {
                     .join(", ");
                 (song.name.clone(), artists, song.album.name.clone())
             }
-            None => (
-                "No song playing".to_string(),
-                String::new(),
-                String::new(),
-            ),
+            None => ("No song playing".to_string(), String::new(), String::new()),
         };
 
         let status_icon = if self.is_playing { "▶" } else { "⏸" };
@@ -119,9 +115,7 @@ impl PlayerPage {
                 ),
                 Span::styled(
                     title,
-                    Style::default()
-                        .fg(Theme::FG)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![
@@ -200,7 +194,9 @@ impl PlayerPage {
             ));
 
         f.render_widget(
-            Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false }),
             area,
         );
     }
@@ -208,10 +204,7 @@ impl PlayerPage {
     fn render_controls(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Length(2),
-            ])
+            .constraints([Constraint::Length(3), Constraint::Length(2)])
             .split(area);
 
         self.render_progress(f, chunks[0]);
@@ -230,11 +223,7 @@ impl PlayerPage {
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(Theme::ACCENT_DIM)),
             )
-            .gauge_style(
-                Style::default()
-                    .fg(Theme::ACCENT)
-                    .bg(Color::Black),
-            )
+            .gauge_style(Style::default().fg(Theme::ACCENT).bg(Color::Black))
             .ratio(self.progress)
             .label(label);
 
@@ -352,10 +341,7 @@ impl PlayerPage {
                     Span::styled(format!(" — {artists}"), Style::default().fg(Theme::MUTED)),
                 ]
             }
-            None => vec![Span::styled(
-                "no song",
-                Style::default().fg(Theme::MUTED),
-            )],
+            None => vec![Span::styled("no song", Style::default().fg(Theme::MUTED))],
         }
     }
 

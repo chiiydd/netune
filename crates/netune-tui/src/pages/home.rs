@@ -180,24 +180,20 @@ impl HomePage {
             .map(|item| item.action)
             .unwrap_or(MenuAction::Quit);
         match action {
-            MenuAction::Playlists => PageAction::Push(super::Page::Playlist(
-                super::PlaylistPage::new(),
-            )),
-            MenuAction::Search => PageAction::Push(super::Page::Search(
-                super::SearchPage::new(),
-            )),
-            MenuAction::DailyRecommend => PageAction::Push(super::Page::Playlist(
-                super::PlaylistPage::new(),
-            )),
-            MenuAction::PersonalFm => PageAction::Push(super::Page::Player(
-                super::PlayerPage::new(),
-            )),
-            MenuAction::Login => PageAction::Push(super::Page::Login(
-                super::LoginPage::new(),
-            )),
-            MenuAction::Settings => PageAction::Push(super::Page::Settings(
-                super::SettingsPage::new(),
-            )),
+            MenuAction::Playlists => {
+                PageAction::Push(super::Page::Playlist(super::PlaylistPage::new()))
+            }
+            MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
+            MenuAction::DailyRecommend => {
+                PageAction::Push(super::Page::Playlist(super::PlaylistPage::new()))
+            }
+            MenuAction::PersonalFm => {
+                PageAction::Push(super::Page::Player(super::PlayerPage::new()))
+            }
+            MenuAction::Login => PageAction::Push(super::Page::Login(super::LoginPage::new())),
+            MenuAction::Settings => {
+                PageAction::Push(super::Page::Settings(super::SettingsPage::new()))
+            }
             MenuAction::Quit => PageAction::Quit,
         }
     }

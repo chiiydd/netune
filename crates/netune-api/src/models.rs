@@ -27,6 +27,7 @@ pub struct ApiSongUrl {
 
 #[derive(Debug, Deserialize)]
 pub struct ApiLyricResponse {
+    pub code: i32,
     pub lrc: Option<ApiLyricBody>,
     pub tlyric: Option<ApiLyricBody>,
 }
@@ -95,4 +96,65 @@ pub struct ApiSongUrlResponse {
     pub code: i32,
     #[serde(default)]
     pub data: Vec<ApiSongUrl>,
+}
+
+// ─── QR code login ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApiQrKeyResponse {
+    pub code: i32,
+    #[serde(default)]
+    pub unikey: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiQrCheckResponse {
+    /// 801 = waiting, 802 = scanned/confirming, 803 = success (cookie set)
+    pub code: i32,
+    pub message: Option<String>,
+    pub profile: Option<ApiProfile>,
+}
+
+// ─── User playlists ────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApiUserPlaylistsResponse {
+    pub code: i32,
+    #[serde(default)]
+    pub playlist: Vec<ApiUserPlaylist>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiUserPlaylist {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub coverImgUrl: Option<String>,
+    #[serde(default)]
+    pub trackCount: u32,
+    pub creator: Option<ApiProfile>,
+}
+
+// ─── Daily recommend ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApiDailyRecommendResponse {
+    pub code: i32,
+    #[serde(default)]
+    pub data: Option<ApiDailyRecommendData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApiDailyRecommendData {
+    #[serde(default)]
+    pub dailySongs: Vec<ApiTrack>,
+}
+
+// ─── Personal FM ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApiPersonalFmResponse {
+    pub code: i32,
+    #[serde(default)]
+    pub data: Vec<ApiTrack>,
 }

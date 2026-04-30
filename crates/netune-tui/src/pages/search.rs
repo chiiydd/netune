@@ -14,8 +14,8 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use netune_core::models::Song;
 
 use crate::chrome::KeyHint;
-use crate::theme::Theme;
 use crate::pages::PageAction;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchMode {
@@ -64,10 +64,7 @@ impl SearchPage {
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(1),
-            ])
+            .constraints([Constraint::Length(3), Constraint::Min(1)])
             .split(area);
 
         self.render_input(f, chunks[0]);
@@ -92,7 +89,11 @@ impl SearchPage {
                     .add_modifier(Modifier::BOLD),
             ));
 
-        let cursor = if self.mode == SearchMode::Input { "▏" } else { "" };
+        let cursor = if self.mode == SearchMode::Input {
+            "▏"
+        } else {
+            ""
+        };
         let input = Paragraph::new(Line::from(vec![
             Span::styled(&self.query, Style::default().fg(Theme::FG)),
             Span::styled(cursor, Style::default().fg(Theme::ACCENT)),
@@ -126,10 +127,7 @@ impl SearchPage {
                     ListItem::new(vec![
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(
-                                &song.name,
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ),
+                            Span::styled(&song.name, Style::default().add_modifier(Modifier::BOLD)),
                         ]),
                         Line::from(vec![
                             Span::raw("    "),
@@ -254,10 +252,7 @@ impl SearchPage {
 
     pub fn hints(&self) -> Vec<KeyHint> {
         match self.mode {
-            SearchMode::Input => vec![
-                KeyHint::new("⏎", "search"),
-                KeyHint::new("Esc", "navigate"),
-            ],
+            SearchMode::Input => vec![KeyHint::new("⏎", "search"), KeyHint::new("Esc", "navigate")],
             SearchMode::Normal => vec![
                 KeyHint::new("j/k", "move"),
                 KeyHint::new("⏎", "play"),

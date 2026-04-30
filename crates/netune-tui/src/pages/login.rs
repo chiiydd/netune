@@ -11,8 +11,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::chrome::KeyHint;
-use crate::theme::Theme;
 use crate::pages::PageAction;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoginField {
@@ -115,14 +115,16 @@ impl LoginPage {
                 Constraint::Length(1), // spacer
                 Constraint::Length(1), // password label
                 Constraint::Length(1), // password input
-                Constraint::Min(0),   // flex
+                Constraint::Min(0),    // flex
                 Constraint::Length(1), // error / hint
             ])
             .split(inner);
 
         // ── Phone field ─────────────────────────────────────────────────────
         let phone_style = if self.focus == LoginField::Phone {
-            Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Theme::FG_DIM)
         };
@@ -131,7 +133,11 @@ impl LoginPage {
             rows[0],
         );
 
-        let phone_cursor = if self.focus == LoginField::Phone { "▏" } else { "" };
+        let phone_cursor = if self.focus == LoginField::Phone {
+            "▏"
+        } else {
+            ""
+        };
         let phone_border_color = if self.focus == LoginField::Phone {
             Theme::ACCENT
         } else {
@@ -151,7 +157,9 @@ impl LoginPage {
 
         // ── Password field ──────────────────────────────────────────────────
         let pw_style = if self.focus == LoginField::Password {
-            Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Theme::FG_DIM)
         };
@@ -161,7 +169,11 @@ impl LoginPage {
         );
 
         let masked: String = self.password.chars().map(|_| '*').collect();
-        let pw_cursor = if self.focus == LoginField::Password { "▏" } else { "" };
+        let pw_cursor = if self.focus == LoginField::Password {
+            "▏"
+        } else {
+            ""
+        };
         let pw_border_color = if self.focus == LoginField::Password {
             Theme::ACCENT
         } else {
@@ -223,8 +235,12 @@ impl LoginPage {
             }
             KeyCode::Backspace => {
                 match self.focus {
-                    LoginField::Phone => { self.phone.pop(); }
-                    LoginField::Password => { self.password.pop(); }
+                    LoginField::Phone => {
+                        self.phone.pop();
+                    }
+                    LoginField::Password => {
+                        self.password.pop();
+                    }
                 }
                 self.error = None;
             }

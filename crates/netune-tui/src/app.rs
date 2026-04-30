@@ -26,30 +26,29 @@ impl App {
 
     pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         loop {
-            terminal
-                .draw(|f| {
-                    if let Some(page) = self.page_stack.last_mut() {
-                        let area = f.area();
-                        let chunks = Layout::default()
-                            .direction(Direction::Vertical)
-                            .constraints([
-                                Constraint::Length(1),
-                                Constraint::Min(1),
-                                Constraint::Length(1),
-                            ])
-                            .split(area);
+            terminal.draw(|f| {
+                if let Some(page) = self.page_stack.last_mut() {
+                    let area = f.area();
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(1),
+                            Constraint::Min(1),
+                            Constraint::Length(1),
+                        ])
+                        .split(area);
 
-                        let title = page.title();
-                        chrome::render_titlebar(f, chunks[0], title);
+                    let title = page.title();
+                    chrome::render_titlebar(f, chunks[0], title);
 
-                        page.render(f, chunks[1]);
+                    page.render(f, chunks[1]);
 
-                        let (mode, mode_color) = page.mode();
-                        let context = page.context();
-                        let hints = page.hints();
-                        chrome::render_statusline(f, chunks[2], &mode, mode_color, context, &hints);
-                    }
-                })?;
+                    let (mode, mode_color) = page.mode();
+                    let context = page.context();
+                    let hints = page.hints();
+                    chrome::render_statusline(f, chunks[2], &mode, mode_color, context, &hints);
+                }
+            })?;
 
             if !event::poll(Duration::from_millis(100))? {
                 if let Some(page) = self.page_stack.last_mut() {

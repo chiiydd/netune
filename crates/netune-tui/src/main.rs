@@ -6,12 +6,13 @@ mod pages;
 mod theme;
 mod widgets;
 
-
 use color_eyre::Result;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
-use ratatui::backend::CrosstermBackend;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use app::App;
 

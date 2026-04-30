@@ -11,7 +11,7 @@ use netune_core::traits::AudioPlayer;
 
 /// rodio-based audio player with streaming support.
 pub struct NetunePlayer {
-    volume: Arc<AtomicU32>,     // stored as f32 bits
+    volume: Arc<AtomicU32>, // stored as f32 bits
     playing: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     position: Arc<RwLock<f64>>,
@@ -62,7 +62,8 @@ impl AudioPlayer for NetunePlayer {
     }
 
     fn set_volume(&self, volume: f32) {
-        self.volume.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.volume
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     fn volume(&self) -> f32 {

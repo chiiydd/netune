@@ -1,10 +1,10 @@
 //! Page router — each variant holds one full-screen page.
 
 pub mod home;
-pub mod playlist;
-pub mod player;
-pub mod search;
 pub mod login;
+pub mod player;
+pub mod playlist;
+pub mod search;
 pub mod settings;
 
 use crossterm::event::Event;
@@ -16,10 +16,10 @@ use ratatui::text::Span;
 use crate::chrome::KeyHint;
 
 use self::home::HomePage;
-use self::playlist::PlaylistPage;
-use self::player::PlayerPage;
-use self::search::SearchPage;
 use self::login::LoginPage;
+use self::player::PlayerPage;
+use self::playlist::PlaylistPage;
+use self::search::SearchPage;
 use self::settings::SettingsPage;
 
 /// Actions a page can return to the app loop.
@@ -29,6 +29,15 @@ pub enum PageAction {
     Push(Page),
     Pop,
     Replace(Page),
+}
+
+/// Settings page focus fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    Quality,
+    Theme,
+    Cache,
+    Device,
 }
 
 /// The active full-screen page.

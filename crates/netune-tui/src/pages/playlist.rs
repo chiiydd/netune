@@ -13,8 +13,8 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
 use netune_core::models::{Playlist, Song};
 
 use crate::chrome::KeyHint;
-use crate::theme::Theme;
 use crate::pages::PageAction;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageView {
@@ -115,10 +115,7 @@ impl PlaylistPage {
                     ListItem::new(vec![
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(
-                                &pl.name,
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ),
+                            Span::styled(&pl.name, Style::default().add_modifier(Modifier::BOLD)),
                         ]),
                         Line::from(vec![
                             Span::raw("    "),
@@ -178,10 +175,7 @@ impl PlaylistPage {
                                 format!("  {:3} ", i + 1),
                                 Style::default().fg(Theme::MUTED),
                             ),
-                            Span::styled(
-                                &song.name,
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ),
+                            Span::styled(&song.name, Style::default().add_modifier(Modifier::BOLD)),
                             Span::raw("  "),
                             Span::styled(duration, Style::default().fg(Theme::FG_DIM)),
                         ]),

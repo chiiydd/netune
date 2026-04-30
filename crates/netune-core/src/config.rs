@@ -42,8 +42,8 @@ impl Config {
         let path = Self::config_path()?;
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
-            let config: Self = toml::from_str(&content)
-                .map_err(|e| NetuneError::Config(e.to_string()))?;
+            let config: Self =
+                toml::from_str(&content).map_err(|e| NetuneError::Config(e.to_string()))?;
             Ok(config)
         } else {
             Ok(Self::default())
@@ -56,8 +56,8 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| NetuneError::Config(e.to_string()))?;
+        let content =
+            toml::to_string_pretty(self).map_err(|e| NetuneError::Config(e.to_string()))?;
         std::fs::write(&path, content)?;
         Ok(())
     }
