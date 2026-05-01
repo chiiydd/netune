@@ -96,37 +96,27 @@ impl NeteaseApiClient {
         self.login_state.read().await.clone()
     }
 
-    /// Fetch the current logged-in user profile via /api/user/account.
-    /// This uses the session cookies (MUSIC_U) set during QR login.
+    /// Fetch the current logged-in user profile via /api/user/playlist.
+    /// /api/user/account is deprecated; we extract the profile from the
+    /// first playlist's `creator` field instead.
     async fn fetch_current_user_profile(&self) -> std::result::Result<UserProfile, ApiError> {
-        // NOTE: /api/user/account requires POST (not GET via inner_request)
-        let url = format!("{}/api/user/account", self.base_url);
-        let resp = self
-            .http
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| ApiError::Message(e.to_string()))?;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| ApiError::Message(e.to_string()))?;
-        tracing::debug!(body = %body, "/api/user/account response");
-        let resp: ApiUserAccountResponse =
-            serde_json::from_str(&body).map_err(|e| ApiError::Message(format!("{e}: {body}")))?;
+        let params = serde_json::json!({ "uid": 0, "limit": 1, "offset": 0 });
+        let resp: ApiUserPlaylistsResponse =
+            self.inner_request("/api/user/playlist", &params).await?;
         if resp.code != 200 {
             return Err(ApiError::Code(resp.code));
         }
-        match resp.profile {
-            Some(p) => Ok(UserProfile {
-                uid: p.user_id,
-                nickname: p.nickname,
-                avatar_url: p.avatar_url,
-            }),
-            None => Err(ApiError::Message(
-                "no profile in /api/user/account response".into(),
-            )),
-        }
+        let playlist = resp.playlist.into_iter().next().ok_or_else(|| {
+            ApiError::Message("no playlists returned; cannot determine current user".into())
+        })?;
+        let creator = playlist.creator.ok_or_else(|| {
+            ApiError::Message("first playlist has no creator field".into())
+        })?;
+        Ok(UserProfile {
+            uid: creator.user_id,
+            nickname: creator.nickname,
+            avatar_url: creator.avatar_url,
+        })
     }
 
     /// Send a GET request and return the raw deserialized response.
