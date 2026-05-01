@@ -571,7 +571,13 @@ impl App {
                     Err(e) => {
                         tracing::warn!(error = %e, "Browser cookie import failed");
                         if let Some(Page::Login(lp)) = self.page_stack.last_mut() {
-                            lp.set_error(e.to_string());
+                            let msg = format!(
+                                "{e}\n\
+                                 • Make sure you are logged into music.163.com\n\
+                                 • Close the browser before importing\n\
+                                 • Try a different browser"
+                            );
+                            lp.set_error(msg);
                         }
                     }
                 }

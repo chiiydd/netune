@@ -485,23 +485,59 @@ impl NeteaseClient for NeteaseApiClient {
 
     async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>> {
         let domains = vec!["music.163.com".to_string()];
-        let cookies = match browser {
-            "chrome" => rookie::chrome(Some(domains)),
-            "firefox" => rookie::firefox(Some(domains)),
-            "edge" => rookie::edge(Some(domains)),
-            "brave" => rookie::brave(Some(domains)),
-            "chromium" => rookie::chromium(Some(domains)),
-            _ => {
-                return Err(netune_core::NetuneError::Network(format!(
-                    "Unsupported browser: {browser}"
-                )))
+
+        let cookies = if browser == "auto" {
+            // Try all browsers, find the one with MUSIC_U
+            let loaders: &[(&str, fn(Option<Vec<String>>) -> rookie::Result<Vec<rookie::common::enums::Cookie>>)] = &[
+                ("firefox", rookie::firefox),
+                ("chrome", rookie::chrome),
+                ("edge", rookie::edge),
+                ("brave", rookie::brave),
+                ("chromium", rookie::chromium),
+            ];
+            let mut found = None;
+            for &(name, loader) in loaders {
+                match loader(Some(domains.clone())) {
+                    Ok(cookies) => {
+                        if cookies.iter().any(|c| c.name == "MUSIC_U") {
+                            tracing::info!(browser = name, "Found MUSIC_U cookie");
+                            found = Some(cookies);
+                            break;
+                        } else {
+                            tracing::debug!(browser = name, "No MUSIC_U cookie found");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(browser = name, error = %e, "Failed to read cookies");
+                    }
+                }
             }
-        }
-        .map_err(|e| {
-            netune_core::NetuneError::Network(format!(
-                "Failed to read cookies from {browser}: {e}. Make sure the browser is closed."
-            ))
-        })?;
+            found.ok_or_else(|| netune_core::NetuneError::Auth(
+                "MUSIC_U cookie not found in any browser.\n\
+                 1. Make sure you are logged into music.163.com in your browser\n\
+                 2. Close the browser before importing\n\
+                 3. Try selecting a specific browser manually".into()
+            ))?
+        } else {
+            match browser {
+                "chrome" => rookie::chrome(Some(domains)),
+                "firefox" => rookie::firefox(Some(domains)),
+                "edge" => rookie::edge(Some(domains)),
+                "brave" => rookie::brave(Some(domains)),
+                "chromium" => rookie::chromium(Some(domains)),
+                _ => {
+                    return Err(netune_core::NetuneError::Network(format!(
+                        "Unsupported browser: {browser}"
+                    )))
+                }
+            }
+            .map_err(|e| {
+                netune_core::NetuneError::Network(format!(
+                    "Failed to read cookies from {browser}: {e}.\n\
+                     Make sure the browser is closed."
+                ))
+            })?
+        };
 
         // Find MUSIC_U cookie
         let music_u = cookies
@@ -509,8 +545,13 @@ impl NeteaseClient for NeteaseApiClient {
             .find(|c| c.name == "MUSIC_U")
             .ok_or_else(|| {
                 netune_core::NetuneError::Auth(
-                    "MUSIC_U cookie not found. Please login to music.163.com in your browser first."
-                        .into(),
+                    format!(
+                        "MUSIC_U cookie not found in {browser}.\n\
+                         1. Make sure you are logged into music.163.com in your browser\n\
+                         2. Close the browser before importing\n\
+                         3. Try a different browser"
+                    )
+                    .into(),
                 )
             })?;
 

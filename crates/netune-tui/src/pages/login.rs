@@ -48,8 +48,9 @@ impl LoginPage {
             tick_count: 0,
             selected_browser: 0,
             browsers: vec![
-                ("chrome", "Chrome"),
+                ("auto", "🔍 Auto detect"),
                 ("firefox", "Firefox"),
+                ("chrome", "Chrome"),
                 ("edge", "Edge"),
                 ("brave", "Brave"),
                 ("chromium", "Chromium"),
