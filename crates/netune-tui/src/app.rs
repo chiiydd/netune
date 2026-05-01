@@ -668,7 +668,9 @@ impl App {
                     let should_autoplay = self.player.as_ref().is_none_or(|p| !p.is_playing())
                         && self.play_queue.current().is_some();
                     if should_autoplay {
-                        self.do_play_next().await;
+                        if let Some(song) = self.play_queue.current().cloned() {
+                            self.do_play_song(song).await;
+                        }
                     }
                 }
             }
