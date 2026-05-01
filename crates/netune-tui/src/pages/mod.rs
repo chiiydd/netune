@@ -69,6 +69,8 @@ pub enum PageAction {
     CyclePlayMode,
     /// Auto-advance to the next song when the current one finishes.
     PlayNext,
+    /// Go to the previous track in the queue.
+    PlayPrev,
 }
 
 /// Settings page focus fields.

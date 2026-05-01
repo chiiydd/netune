@@ -406,6 +406,8 @@ impl PlayerPage {
             KeyCode::Up => PageAction::SetVolume(self.volume.saturating_add(5).min(100)),
             KeyCode::Down => PageAction::SetVolume(self.volume.saturating_sub(5)),
             KeyCode::Tab => PageAction::ToggleQueuePanel,
+            KeyCode::Char('n') => PageAction::PlayNext,
+            KeyCode::Char('p') => PageAction::PlayPrev,
             _ => PageAction::None,
         }
     }
@@ -481,6 +483,8 @@ impl PlayerPage {
     pub fn hints(&self) -> Vec<KeyHint> {
         vec![
             KeyHint::new("Space", "pause"),
+            KeyHint::new("n", "next"),
+            KeyHint::new("p", "prev"),
             KeyHint::new("←/→", "seek"),
             KeyHint::new("↑/↓", "vol"),
             KeyHint::new("m", "mode"),

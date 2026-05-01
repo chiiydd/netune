@@ -860,6 +860,11 @@ impl App {
                 self.do_play_next().await;
             }
 
+            // ── Previous track ──────────────────────────────────────────
+            PageAction::PlayPrev => {
+                self.do_play_prev().await;
+            }
+
             // ── Fetch playlist detail ───────────────────────────────────
             PageAction::FetchPlaylistDetail(playlist_id) => {
                 let Some(ref client) = self.api_client else {
