@@ -462,17 +462,6 @@ impl NeteaseClient for NeteaseApiClient {
         Ok(DailyRecommend { songs })
     }
 
-    async fn personal_fm(&self) -> Result<Vec<Song>> {
-        let path = "/weapi/v6/personal/fm";
-        let params = serde_json::json!({ "limit": 30 });
-        let tracks = self
-            .request::<ApiPersonalFmResponse>(path, &params)
-            .await
-            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
-        let songs = tracks.into_iter().map(Self::track_to_song).collect();
-        Ok(songs)
-    }
-
     async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>> {
         let domains = vec!["music.163.com".to_string()];
 

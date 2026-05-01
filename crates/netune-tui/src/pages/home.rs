@@ -31,7 +31,6 @@ enum MenuAction {
     Playlists,
     Search,
     DailyRecommend,
-    PersonalFm,
     Login,
     Logout,
     Settings,
@@ -99,11 +98,6 @@ impl HomePage {
                 label: "Daily Recommend",
                 desc: "Personalized daily mix for you",
                 action: MenuAction::DailyRecommend,
-            });
-            items.push(MenuItem {
-                label: "Personal FM",
-                desc: "Endless radio tailored to your taste",
-                action: MenuAction::PersonalFm,
             });
         }
 
@@ -286,9 +280,6 @@ impl HomePage {
             MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
             MenuAction::DailyRecommend => {
                 PageAction::FetchDailyRecommend
-            }
-            MenuAction::PersonalFm => {
-                PageAction::Push(super::Page::Player(super::PlayerPage::new()))
             }
             MenuAction::Login => PageAction::Push(super::Page::Login(super::LoginPage::new())),
             MenuAction::Logout => PageAction::Pop,

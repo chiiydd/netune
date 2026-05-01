@@ -215,15 +215,6 @@ pub struct ApiDailyRecommendData {
     pub daily_songs: Vec<ApiTrack>,
 }
 
-// ─── Personal FM ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct ApiPersonalFmResponse {
-    pub code: i32,
-    #[serde(default)]
-    pub data: Vec<ApiTrack>,
-}
-
 // ─── InnerData impls ─────────────────────────────────────────────────────────
 
 impl InnerData for ApiSearchResponse {
@@ -288,16 +279,6 @@ impl InnerData for ApiDailyRecommendResponse {
             return Err(ApiError::Code(self.code));
         }
         self.data.ok_or_else(|| ApiError::Message("no daily recommend data".into()))
-    }
-}
-
-impl InnerData for ApiPersonalFmResponse {
-    type Output = Vec<ApiTrack>;
-    fn into_data(self) -> Result<Self::Output, ApiError> {
-        if self.code != 200 {
-            return Err(ApiError::Code(self.code));
-        }
-        Ok(self.data)
     }
 }
 

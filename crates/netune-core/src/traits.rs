@@ -38,9 +38,6 @@ pub trait NeteaseClient: Send + Sync {
     /// Get daily recommendations.
     async fn daily_recommend(&self) -> Result<DailyRecommend>;
 
-    /// Get personal FM.
-    async fn personal_fm(&self) -> Result<Vec<Song>>;
-
     /// Import cookies from a local browser to bypass QR login.
     async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>>;
 
@@ -151,10 +148,6 @@ mod tests {
 
         async fn daily_recommend(&self) -> Result<DailyRecommend> {
             Ok(DailyRecommend { songs: vec![] })
-        }
-
-        async fn personal_fm(&self) -> Result<Vec<Song>> {
-            Ok(vec![])
         }
 
         async fn import_browser_cookies(&self, _browser: &str) -> Result<Option<UserProfile>> {
