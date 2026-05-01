@@ -45,9 +45,11 @@ impl Default for NetunePlayer {
 #[async_trait]
 impl AudioPlayer for NetunePlayer {
     async fn play(&self, url: &str) -> Result<()> {
-        // Drop old playback state entirely before starting new.
+        // Stop and drop old playback.
         if let Ok(mut state) = self.state.lock() {
-            *state = None;
+            if let Some(old) = state.take() {
+                old.player.stop();
+            }
         }
 
         // Download the audio data from the URL.
@@ -70,8 +72,9 @@ impl AudioPlayer for NetunePlayer {
             .unwrap_or(0.0);
 
         // Create a device sink to the default audio output.
-        let device_sink = DeviceSinkBuilder::open_default_sink()
+        let mut device_sink = DeviceSinkBuilder::open_default_sink()
             .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+        device_sink.log_on_drop(false);
 
         // Create a player connected to the mixer.
         let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
@@ -106,9 +109,11 @@ impl AudioPlayer for NetunePlayer {
     }
 
     fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
-        // Drop old playback state entirely before starting new.
+        // Stop and drop old playback.
         if let Ok(mut state) = self.state.lock() {
-            *state = None;
+            if let Some(old) = state.take() {
+                old.player.stop();
+            }
         }
 
         // Create decoder directly from pre-fetched bytes (skip download).
@@ -123,8 +128,9 @@ impl AudioPlayer for NetunePlayer {
             .unwrap_or(0.0);
 
         // Create a device sink to the default audio output.
-        let device_sink = DeviceSinkBuilder::open_default_sink()
+        let mut device_sink = DeviceSinkBuilder::open_default_sink()
             .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+        device_sink.log_on_drop(false);
 
         // Create a player connected to the mixer.
         let rodio_player = RodioPlayer::connect_new(device_sink.mixer());

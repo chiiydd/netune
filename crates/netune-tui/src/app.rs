@@ -39,6 +39,7 @@ fn queue_file_path() -> std::path::PathBuf {
 
 /// Result of a background song-loading task.
 struct PendingPlayResult {
+    song_id: u64,
     _song: Song,
     /// Audio bytes — `None` when we already played from cache (cache hit).
     audio_bytes: Option<Vec<u8>>,
@@ -152,6 +153,7 @@ impl App {
                     })
                     .ok();
                 PendingPlayResult {
+                    song_id,
                     _song: song,
                     audio_bytes: None, // already played from cache
                     lyrics,
@@ -193,6 +195,7 @@ impl App {
                 };
 
                 PendingPlayResult {
+                    song_id: song.id,
                     _song: song,
                     audio_bytes,
                     lyrics,
@@ -216,6 +219,19 @@ impl App {
         };
         match handle.await {
             Ok(result) => {
+                // Check if the current player page is still showing this song.
+                let current_song_id = self.page_stack.iter().find_map(|page| {
+                    if let Page::Player(pp) = page {
+                        pp.song().map(|s| s.id)
+                    } else {
+                        None
+                    }
+                });
+                if current_song_id != Some(result.song_id) {
+                    tracing::info!(expected = result.song_id, actual = ?current_song_id, "Stale play result, skipping");
+                    return;
+                }
+
                 // Start playback if we got audio bytes (cache-miss path).
                 if let Some(bytes) = result.audio_bytes {
                     if let Some(ref player) = self.player {
