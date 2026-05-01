@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::cookie::CookieStore;
+use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT, REFERER};
 use tokio::sync::RwLock;
 
 use netune_core::Result;
@@ -26,8 +27,19 @@ pub struct NeteaseApiClient {
 impl NeteaseApiClient {
     pub fn new() -> Self {
         let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+                 AppleWebKit/537.36 (KHTML, like Gecko) \
+                 Chrome/120.0.0.0 Safari/537.36",
+            ),
+        );
+        headers.insert(REFERER, HeaderValue::from_static("https://music.163.com"));
         Self {
             http: Client::builder()
+                .default_headers(headers)
                 .cookie_provider(Arc::clone(&cookie_jar))
                 .no_proxy()
                 .build()
@@ -92,7 +104,6 @@ impl NeteaseApiClient {
         let resp = self
             .http
             .post(&url)
-            .header("Referer", &self.base_url)
             .send()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
