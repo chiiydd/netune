@@ -43,6 +43,9 @@ pub trait NeteaseClient: Send + Sync {
 
     /// Import cookies from a local browser to bypass QR login.
     async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>>;
+
+    /// Add songs to a playlist.
+    async fn add_to_playlist(&self, playlist_id: u64, song_ids: Vec<u64>) -> Result<()>;
 }
 
 /// Player trait — audio playback operations.
@@ -156,6 +159,10 @@ mod tests {
 
         async fn import_browser_cookies(&self, _browser: &str) -> Result<Option<UserProfile>> {
             Ok(None)
+        }
+
+        async fn add_to_playlist(&self, _playlist_id: u64, _song_ids: Vec<u64>) -> Result<()> {
+            Ok(())
         }
     }
 

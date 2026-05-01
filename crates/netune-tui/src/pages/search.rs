@@ -275,6 +275,11 @@ impl SearchPage {
                     return PageAction::PlaySong(song);
                 }
             }
+            KeyCode::Char('a') if len > 0 => {
+                if let Some(song) = self.selected_song().cloned() {
+                    return PageAction::AddToQueue(song);
+                }
+            }
             _ => {}
         }
         PageAction::None
@@ -315,6 +320,7 @@ impl SearchPage {
             SearchMode::Normal => vec![
                 KeyHint::new("j/k", "move"),
                 KeyHint::new("⏎", "play"),
+                KeyHint::new("a", "add to queue"),
                 KeyHint::new("i", "edit"),
                 KeyHint::new("Esc", "back"),
             ],

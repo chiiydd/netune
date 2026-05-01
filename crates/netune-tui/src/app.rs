@@ -29,6 +29,14 @@ use crate::pages::Page;
 use crate::pages::PageAction;
 use crate::widgets::queue_panel::{QueuePanel, QueuePanelResult};
 
+/// Path to the persisted queue file (~/.netune/queue.json).
+fn queue_file_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".netune")
+        .join("queue.json")
+}
+
 /// Result of a background song-loading task.
 struct PendingPlayResult {
     _song: Song,
@@ -492,6 +500,19 @@ impl App {
             }
         }
 
+        // Restore queue from last session.
+        let queue_path = queue_file_path();
+        match PlayQueue::load_from_file(&queue_path) {
+            Ok(queue) => {
+                tracing::info!(songs = queue.len(), "Restored queue from file");
+                self.play_queue = queue;
+            }
+            Err(e) => {
+                // Not fatal — start with an empty queue.
+                tracing::warn!(error = %e, "Could not restore queue (starting fresh)");
+            }
+        }
+
         loop {
             terminal.draw(|f| {
                 if let Some(page) = self.page_stack.last_mut() {
@@ -593,6 +614,12 @@ impl App {
                 break;
             }
         }
+
+        // Persist queue for next session.
+        if let Err(e) = self.play_queue.save_to_file(&queue_file_path()) {
+            tracing::warn!(error = %e, "Failed to save queue on exit");
+        }
+
         Ok(())
     }
 
@@ -770,6 +797,12 @@ impl App {
             // ── Play song ───────────────────────────────────────────────
             PageAction::PlaySong(song) => {
                 self.do_play_song(song).await;
+            }
+
+            // ── Add to queue ─────────────────────────────────────────────
+            PageAction::AddToQueue(song) => {
+                tracing::info!(song_id = song.id, title = %song.name, "Added to queue");
+                self.play_queue.push(song);
             }
 
             // ── Play queue ──────────────────────────────────────────────

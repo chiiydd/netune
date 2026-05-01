@@ -580,6 +580,32 @@ impl NeteaseClient for NeteaseApiClient {
             }
         }
     }
+
+    async fn add_to_playlist(&self, playlist_id: u64, song_ids: Vec<u64>) -> Result<()> {
+        let url = format!("{}/api/playlist/tracks", self.base_url);
+        let tracks_json = serde_json::to_string(&song_ids)
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let resp = self.http
+            .post(&url)
+            .form(&[
+                ("op", "add"),
+                ("pid", &playlist_id.to_string()),
+                ("tracks", &tracks_json),
+            ])
+            .send()
+            .await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        let body = resp.text().await
+            .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
+        tracing::debug!(body = %body, "add_to_playlist response");
+        let result: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| netune_core::NetuneError::Network(format!("parse: {e}, body={body}")))?;
+        let code = result.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            return Err(netune_core::NetuneError::Network(format!("add_to_playlist failed: code {code}")));
+        }
+        Ok(())
+    }
 }
 
 /// Parse an LRC-format lyric string into `Vec<LyricLine>`.

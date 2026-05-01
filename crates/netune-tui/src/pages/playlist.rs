@@ -280,6 +280,11 @@ impl PlaylistPage {
                     return PageAction::PlaySong(song);
                 }
             }
+            KeyCode::Char('a') if len > 0 => {
+                if let Some(song) = self.selected_track().cloned() {
+                    return PageAction::AddToQueue(song);
+                }
+            }
             KeyCode::Esc | KeyCode::Char('h') => {
                 self.back_to_list();
             }
@@ -334,6 +339,7 @@ impl PlaylistPage {
             PageView::Tracks => vec![
                 KeyHint::new("j/k", "move"),
                 KeyHint::new("⏎", "play"),
+                KeyHint::new("a", "add to queue"),
                 KeyHint::new("Esc/h", "back"),
             ],
         }

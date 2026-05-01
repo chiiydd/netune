@@ -47,6 +47,8 @@ pub enum PageAction {
     PlaySong(Song),
     /// Load playlist tracks and set them as the play queue.
     PlayQueue(Vec<Song>),
+    /// Add a single song to the play queue without starting playback.
+    AddToQueue(Song),
     /// Fetch playlist detail tracks from API.
     FetchPlaylistDetail(u64),
     /// Fetch daily recommend songs from API.

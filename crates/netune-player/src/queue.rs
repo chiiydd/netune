@@ -1,9 +1,10 @@
 //! Playback queue management.
 
 use netune_core::models::Song;
+use serde::{Deserialize, Serialize};
 
 /// Play mode for the queue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayMode {
     /// Play in order — stop at the end of the queue.
     Sequential,
@@ -195,6 +196,41 @@ impl PlayQueue {
     pub fn songs(&self) -> &[Song] {
         &self.songs
     }
+
+    /// Save the queue state to a JSON file for persistence across sessions.
+    pub fn save_to_file(&self, path: &std::path::Path) -> netune_core::Result<()> {
+        let snapshot = QueueSnapshot {
+            songs: self.songs.clone(),
+            current: self.current,
+            mode: self.mode,
+        };
+        let json = serde_json::to_string_pretty(&snapshot)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load a queue from a previously saved JSON file.
+    pub fn load_from_file(path: &std::path::Path) -> netune_core::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        let snapshot: QueueSnapshot = serde_json::from_str(&json)?;
+        Ok(PlayQueue {
+            songs: snapshot.songs,
+            current: snapshot.current,
+            mode: snapshot.mode,
+            history: Vec::new(),
+        })
+    }
+}
+
+/// Serializable snapshot of the play queue for persistence.
+#[derive(Serialize, Deserialize)]
+struct QueueSnapshot {
+    songs: Vec<Song>,
+    current: usize,
+    mode: PlayMode,
 }
 
 impl Default for PlayQueue {
