@@ -214,9 +214,7 @@ impl PlayerPage {
             let filled_bar: String = "━".repeat(filled.saturating_sub(1));
             let empty_bar: String = "░".repeat(empty);
             // Build progress line spans
-            let indent = "     ";
             let prog_line = Line::from(vec![
-                Span::styled(indent, Style::default()),
                 Span::styled("▶ ", Style::default().fg(Theme::ACCENT)),
                 Span::styled(filled_bar, Style::default().fg(Theme::ACCENT)),
                 Span::styled("●", Style::default().fg(Theme::ACCENT)),
@@ -228,9 +226,7 @@ impl PlayerPage {
             lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
 
             // Line 6: time
-            let time_padding = (box_w.saturating_sub(display_width(&time_str))) / 2;
-            let time_display = " ".repeat(time_padding) + &time_str;
-            lines.push(self.make_boxed_line(&time_display, Style::default().fg(Theme::FG_DIM), bc, box_w));
+            lines.push(self.make_boxed_line(&time_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
 
             // Line 7: blank
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
@@ -238,9 +234,9 @@ impl PlayerPage {
             // ── Playback controls ──
             // Line 8:  ◄◄   ▶/❚❚   ►►   🔀
             let controls = if self.is_playing {
-                format!("  ◄◄   ▶❚❚   ►►   {}", self.play_mode_symbol())
+                format!("◄◄   ▶❚❚   ►►   {}", self.play_mode_symbol())
             } else {
-                format!("  ◄◄    ▶    ►►   {}", self.play_mode_symbol())
+                format!("◄◄    ▶    ►►   {}", self.play_mode_symbol())
             };
             lines.push(self.make_boxed_line(&controls, Style::default().fg(Theme::MUTED), bc, box_w));
 
@@ -253,7 +249,7 @@ impl PlayerPage {
             let vol_filled = (self.volume as usize * vol_bar_w) / 100;
             let vol_empty = vol_bar_w.saturating_sub(vol_filled);
             let vol_str = format!(
-                "     vol {}{} {}%",
+                "vol {}{} {}%",
                 "█".repeat(vol_filled),
                 "░".repeat(vol_empty),
                 self.volume
@@ -284,11 +280,14 @@ impl PlayerPage {
     /// Helper: build a box row `│ text... │` with centered-ish padding.
     fn make_boxed_line(&self, text: &str, style: Style, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
         let text_w = display_width(text);
-        let pad = box_w.saturating_sub(text_w);
+        let total_pad = box_w.saturating_sub(text_w);
+        let left_pad = total_pad / 2;
+        let right_pad = total_pad - left_pad;
         Line::from(vec![
             Span::styled("│", Style::default().fg(bc)),
+            Span::styled(" ".repeat(left_pad), Style::default()),
             Span::styled(text.to_string(), style),
-            Span::styled(" ".repeat(pad), Style::default()),
+            Span::styled(" ".repeat(right_pad), Style::default()),
             Span::styled("│", Style::default().fg(bc)),
         ])
     }
@@ -296,10 +295,13 @@ impl PlayerPage {
     /// Helper: embed a rich Line inside a box row.
     fn make_boxed_line_spans(&self, inner: Line<'static>, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
         let text_w: usize = inner.spans.iter().map(|s| display_width(&s.content)).sum();
-        let pad = box_w.saturating_sub(text_w);
+        let total_pad = box_w.saturating_sub(text_w);
+        let left_pad = total_pad / 2;
+        let right_pad = total_pad - left_pad;
         let mut spans = vec![Span::styled("│", Style::default().fg(bc))];
+        spans.push(Span::styled(" ".repeat(left_pad), Style::default()));
         spans.extend(inner.spans);
-        spans.push(Span::styled(" ".repeat(pad), Style::default()));
+        spans.push(Span::styled(" ".repeat(right_pad), Style::default()));
         spans.push(Span::styled("│", Style::default().fg(bc)));
         Line::from(spans)
     }
