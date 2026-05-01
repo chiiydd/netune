@@ -643,10 +643,22 @@ impl App {
             PageAction::Quit => self.should_quit = true,
             PageAction::Push(page) => {
                 let is_login = matches!(page, Page::Login(_));
+                let is_player = matches!(page, Page::Player(_));
                 self.page_stack.push(page);
                 // Auto-generate QR code when login page opens.
                 if is_login {
                     self.do_qr_refresh().await;
+                }
+                // Sync current playback state into a newly pushed PlayerPage.
+                if is_player {
+                    self.sync_player_state();
+                    // Also set play mode from queue.
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_play_mode(self.play_queue.mode());
+                            break;
+                        }
+                    }
                 }
             }
             PageAction::Pop => {
