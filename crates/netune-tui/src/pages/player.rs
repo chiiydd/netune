@@ -1,9 +1,10 @@
 //! Player page — full-screen now-playing view.
 //!
-//! Three zones:
-//! - **Info**: song title + artist/album.
-//! - **Lyrics**: scrollable lyric lines with current line highlighted.
-//! - **Controls**: progress bar + elapsed/duration + volume.
+//! Compact, terminal-native layout inspired by ncmpcpp / spotify-tui:
+//! - **Info**: status icon + title + artist/album (no border)
+//! - **Progress bar**: block characters with elapsed/duration
+//! - **Lyrics**: scrollable, current line highlighted (no border)
+//! - **Controls**: play/pause/next/prev + volume + play mode (single line)
 
 use std::time::Duration;
 
@@ -11,11 +12,11 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
-use netune_core::models::Song;
 use netune_core::models::Lyrics;
+use netune_core::models::Song;
 use netune_player::PlayMode;
 
 use crate::chrome::KeyHint;
@@ -114,49 +115,35 @@ impl PlayerPage {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),
-                Constraint::Min(3),
-                Constraint::Length(5),
+                Constraint::Length(3), // info (title + artist)
+                Constraint::Length(1), // separator
+                Constraint::Length(1), // progress bar
+                Constraint::Length(1), // separator
+                Constraint::Min(3),    // lyrics (fills remaining space)
+                Constraint::Length(1), // separator
+                Constraint::Length(1), // controls line
             ])
             .split(area);
 
         self.render_info(f, chunks[0]);
+        Self::render_separator(f, chunks[1], Theme::MUTED);
 
         if self.loading {
-            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let frame = SPINNER[self.loading_tick % SPINNER.len()];
-            let loading_text = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("  {frame} "),
-                    Style::default().fg(Theme::ACCENT),
-                ),
-                Span::styled(
-                    "Loading audio...",
-                    Style::default()
-                        .fg(Theme::MUTED)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
-                    .title(Span::styled(
-                        " ♫ Lyrics ",
-                        Style::default()
-                            .fg(Theme::ACCENT)
-                            .add_modifier(Modifier::BOLD),
-                    )),
-            );
-            f.render_widget(loading_text, chunks[1]);
+            Self::render_loading(f, chunks[2], chunks[4]);
         } else {
-            self.render_lyrics(f, chunks[1]);
+            self.render_progress_bar(f, chunks[2]);
+        }
+        Self::render_separator(f, chunks[3], Theme::MUTED);
+
+        if !self.loading {
+            self.render_lyrics(f, chunks[4]);
         }
 
-        self.render_controls(f, chunks[2]);
+        Self::render_separator(f, chunks[5], Theme::MUTED);
+        self.render_controls_line(f, chunks[6]);
     }
 
+    /// Song title (bold) + artist · album (dimmed), no border.
     fn render_info(&self, f: &mut Frame, area: Rect) {
         let (title, artists, album) = match &self.song {
             Some(song) => {
@@ -196,27 +183,70 @@ impl PlayerPage {
                 if album.is_empty() {
                     Span::raw("")
                 } else {
-                    Span::styled(format!(" — {album}"), Style::default().fg(Theme::MUTED))
+                    Span::styled(format!(" · {album}"), Style::default().fg(Theme::MUTED))
                 },
             ]),
         ];
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::ACCENT_DIM))
-            .title(Span::styled(
-                " Now Playing ",
-                Style::default()
-                    .fg(Theme::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ));
-
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        f.render_widget(Paragraph::new(lines), area);
     }
 
+    /// Block-character progress bar: `elapsed ▓▓▓▓▓▓░░░░ duration`
+    fn render_progress_bar(&self, f: &mut Frame, area: Rect) {
+        let elapsed_str = format_duration(self.elapsed);
+        let duration_str = format_duration(self.duration);
+        let overhead = elapsed_str.len() as u16 + duration_str.len() as u16 + 4; // spaces around bar
+        let bar_width = area.width.saturating_sub(overhead) as usize;
+        let filled = (self.progress * bar_width as f64) as usize;
+        let empty = bar_width.saturating_sub(filled);
+
+        let line = Line::from(vec![
+            Span::styled(
+                format!(" {elapsed_str} "),
+                Style::default().fg(Theme::FG_DIM),
+            ),
+            Span::styled("▓".repeat(filled), Style::default().fg(Theme::ACCENT)),
+            Span::styled("░".repeat(empty), Style::default().fg(Theme::MUTED)),
+            Span::styled(
+                format!(" {duration_str} "),
+                Style::default().fg(Theme::FG_DIM),
+            ),
+        ]);
+
+        f.render_widget(Paragraph::new(line), area);
+    }
+
+    /// Thin horizontal separator: `─────────`
+    fn render_separator(f: &mut Frame, area: Rect, color: Color) {
+        let line = "─".repeat(area.width as usize);
+        f.render_widget(
+            Paragraph::new(Span::styled(line, Style::default().fg(color))),
+            area,
+        );
+    }
+
+    /// Loading state: spinner in progress bar area + message in lyrics area.
+    fn render_loading(f: &mut Frame, progress_area: Rect, lyrics_area: Rect) {
+        // Empty progress bar area
+        f.render_widget(Paragraph::new(""), progress_area);
+
+        const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame = SPINNER[0]; // static render; tick updates via re-render
+        let loading_text = Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {frame} "), Style::default().fg(Theme::ACCENT)),
+            Span::styled(
+                "Loading audio...",
+                Style::default()
+                    .fg(Theme::MUTED)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        f.render_widget(loading_text, lyrics_area);
+    }
+
+    /// Lyrics with current line highlighted, no border.
     fn render_lyrics(&self, f: &mut Frame, area: Rect) {
-        let inner_height = area.height.saturating_sub(2) as usize;
+        let inner_height = area.height as usize;
 
         let lines: Vec<Line> = match &self.lyrics {
             None => vec![Line::from(Span::styled(
@@ -260,91 +290,53 @@ impl PlayerPage {
             }
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::ACCENT_DIM))
-            .title(Span::styled(
-                " Lyrics ",
-                Style::default()
-                    .fg(Theme::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ));
-
-        f.render_widget(
-            Paragraph::new(lines)
-                .block(block)
-                .wrap(Wrap { trim: false }),
-            area,
-        );
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
     }
 
-    fn render_controls(&self, f: &mut Frame, area: Rect) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Length(1),
-                Constraint::Length(2),
-            ])
-            .split(area);
-
-        self.render_progress(f, chunks[0]);
-        self.render_play_mode(f, chunks[1]);
-        self.render_volume(f, chunks[2]);
-    }
-
-    fn render_progress(&self, f: &mut Frame, area: Rect) {
-        let elapsed_str = format_duration(self.elapsed);
-        let duration_str = format_duration(self.duration);
-        let label = format!("{elapsed_str} / {duration_str}");
-
-        let gauge = Gauge::default()
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM)),
-            )
-            .gauge_style(Style::default().fg(Theme::ACCENT).bg(Color::Black))
-            .ratio(self.progress)
-            .label(label);
-
-        f.render_widget(gauge, area);
-    }
-
-    fn render_play_mode(&self, f: &mut Frame, area: Rect) {
-        let (icon, label, color) = match self.play_mode {
+    /// Single-line controls: ◄  ▶  ►   🔊 ▓▓▓▓▓▓░░ 80%   🔁 顺序
+    fn render_controls_line(&self, f: &mut Frame, area: Rect) {
+        let (mode_icon, mode_label, mode_color) = match self.play_mode {
             PlayMode::Sequential => ("▶▷", "顺序", Theme::MUTED),
             PlayMode::LoopAll => ("🔁", "全部循环", Theme::ACCENT),
             PlayMode::LoopOne => ("🔂", "单曲循环", Theme::WARNING),
             PlayMode::Shuffle => ("🔀", "随机", Theme::SUCCESS),
         };
 
-        let line = Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(icon, Style::default().fg(color)),
-            Span::styled(" ", Style::default()),
-            Span::styled(label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-        ]);
+        let mut spans: Vec<Span<'static>> = vec![];
 
-        f.render_widget(Paragraph::new(line), area);
+        // Play controls — prev / play-pause / next
+        spans.push(Span::styled("  ◄  ", Style::default().fg(Theme::FG_DIM)));
+        spans.push(Span::styled(
+            if self.is_playing { "▶" } else { "⏸" },
+            Theme::accent_bold(),
+        ));
+        spans.push(Span::styled("  ►  ", Style::default().fg(Theme::FG_DIM)));
+
+        // Volume (compact, inline)
+        spans.extend(self.render_volume_inline());
+
+        // Play mode
+        spans.push(Span::styled(
+            format!("  {mode_icon} {mode_label}"),
+            Style::default().fg(mode_color),
+        ));
+
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
-    fn render_volume(&self, f: &mut Frame, area: Rect) {
+    /// Compact inline volume bar: `🔊 ▓▓▓▓▓▓░░ 80%`
+    fn render_volume_inline(&self) -> Vec<Span<'static>> {
         let vol = self.volume as usize;
-        let bar_width = area.width.saturating_sub(4) as usize;
+        let bar_width = 8; // fixed short width — distinct from progress bar
         let filled = (vol * bar_width) / 100;
         let empty = bar_width.saturating_sub(filled);
 
-        let bar_line = Line::from(vec![
+        vec![
             Span::styled(" 🔊 ", Style::default().fg(Theme::MUTED)),
-            Span::styled("━".repeat(filled), Style::default().fg(Theme::ACCENT)),
-            Span::styled("─".repeat(empty), Style::default().fg(Theme::MUTED)),
-            Span::styled(format!(" {vol}%"), Style::default().fg(Theme::FG_DIM)),
-        ]);
-
-        f.render_widget(Paragraph::new(bar_line), area);
+            Span::styled("▓".repeat(filled), Style::default().fg(Theme::ACCENT)),
+            Span::styled("░".repeat(empty), Style::default().fg(Theme::MUTED)),
+            Span::styled(format!(" {vol}% "), Style::default().fg(Theme::FG_DIM)),
+        ]
     }
 
     // ── Events ──────────────────────────────────────────────────────────────
@@ -361,18 +353,10 @@ impl PlayerPage {
             KeyCode::Esc | KeyCode::Char('q') => PageAction::Pop,
             KeyCode::Char(' ') => PageAction::TogglePause,
             KeyCode::Char('m') => PageAction::CyclePlayMode,
-            KeyCode::Left => {
-                PageAction::Seek(-5.0)
-            }
-            KeyCode::Right => {
-                PageAction::Seek(5.0)
-            }
-            KeyCode::Up => {
-                PageAction::SetVolume(self.volume.saturating_add(5).min(100))
-            }
-            KeyCode::Down => {
-                PageAction::SetVolume(self.volume.saturating_sub(5))
-            }
+            KeyCode::Left => PageAction::Seek(-5.0),
+            KeyCode::Right => PageAction::Seek(5.0),
+            KeyCode::Up => PageAction::SetVolume(self.volume.saturating_add(5).min(100)),
+            KeyCode::Down => PageAction::SetVolume(self.volume.saturating_sub(5)),
             KeyCode::Tab => PageAction::ToggleQueuePanel,
             _ => PageAction::None,
         }
