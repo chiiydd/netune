@@ -528,6 +528,55 @@ impl App {
                 }
             }
 
+            // ── Browser cookie import ───────────────────────────────────
+            PageAction::BrowserImportConfirm(browser) => {
+                let Some(Page::Login(lp)) = self.page_stack.last_mut() else {
+                    return;
+                };
+                let Some(ref client) = self.api_client else {
+                    lp.set_error("No API client configured".into());
+                    return;
+                };
+                match client.import_browser_cookies(&browser).await {
+                    Ok(Some(profile)) => {
+                        tracing::info!(
+                            nickname = %profile.nickname,
+                            uid = profile.uid,
+                            "Browser cookie import succeeded"
+                        );
+                        lp.set_success();
+                        self.user = Some(profile.clone());
+                        // Save cookies for future auto-login.
+                        let cookie_path = dirs::home_dir()
+                            .unwrap_or_default()
+                            .join(".netune")
+                            .join("cookies.txt");
+                        if let Some(parent) = cookie_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Err(e) = client.save_cookies(&cookie_path) {
+                            tracing::warn!(error = %e, "Failed to save cookies");
+                        }
+                        // Navigate to home and update user info.
+                        self.page_stack.clear();
+                        let mut home = crate::pages::home::HomePage::new();
+                        home.set_user(Some(profile));
+                        self.page_stack.push(Page::Home(home));
+                        // Fetch playlists in background.
+                        self.fetch_user_playlists().await;
+                    }
+                    Ok(None) => {
+                        lp.set_error("Browser import returned no profile".into());
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Browser cookie import failed");
+                        if let Some(Page::Login(lp)) = self.page_stack.last_mut() {
+                            lp.set_error(e.to_string());
+                        }
+                    }
+                }
+            }
+
             // ── QR Login: generate new QR code ──────────────────────────
             PageAction::QrRefresh => {
                 self.do_qr_refresh().await;

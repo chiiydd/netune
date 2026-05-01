@@ -1,10 +1,10 @@
-//! Login page — QR code scan login.
+//! Login page — QR code scan login + browser cookie import.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::chrome::KeyHint;
@@ -19,6 +19,7 @@ pub enum QrLoginState {
     Scanned,
     Success,
     Expired,
+    BrowserImport,
 }
 
 pub struct LoginPage {
@@ -27,6 +28,8 @@ pub struct LoginPage {
     pub qr_url: Option<String>,
     pub error: Option<String>,
     tick_count: u64,
+    selected_browser: usize,
+    browsers: Vec<(&'static str, &'static str)>,
 }
 
 impl Default for LoginPage {
@@ -43,6 +46,14 @@ impl LoginPage {
             qr_url: None,
             error: None,
             tick_count: 0,
+            selected_browser: 0,
+            browsers: vec![
+                ("chrome", "Chrome"),
+                ("firefox", "Firefox"),
+                ("edge", "Edge"),
+                ("brave", "Brave"),
+                ("chromium", "Chromium"),
+            ],
         }
     }
 
@@ -108,12 +119,18 @@ impl LoginPage {
     fn render_card(&self, f: &mut Frame, area: Rect) {
         f.render_widget(Clear, area);
 
+        let title = if self.qr_state == QrLoginState::BrowserImport {
+            " Browser Import "
+        } else {
+            " QR Login "
+        };
+
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Theme::ACCENT))
             .title(Span::styled(
-                " QR Login ",
+                title,
                 Style::default()
                     .fg(Theme::ACCENT)
                     .add_modifier(Modifier::BOLD),
@@ -121,6 +138,11 @@ impl LoginPage {
 
         let inner = block.inner(area);
         f.render_widget(block, area);
+
+        if self.qr_state == QrLoginState::BrowserImport {
+            self.render_browser_import(f, inner);
+            return;
+        }
 
         // Layout: QR area + spacer + status text + hint
         let rows = Layout::default()
@@ -156,6 +178,7 @@ impl LoginPage {
                     .unwrap_or("二维码已过期，按 R 重新获取");
                 (msg.to_string(), Theme::DANGER)
             }
+            QrLoginState::BrowserImport => unreachable!(),
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -179,6 +202,67 @@ impl LoginPage {
         }
     }
 
+    fn render_browser_import(&self, f: &mut Frame, area: Rect) {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // spacer
+                Constraint::Length(1), // instruction
+                Constraint::Length(1), // spacer
+                Constraint::Min(1),    // browser list
+                Constraint::Length(1), // spacer
+                Constraint::Length(1), // hint
+            ])
+            .split(area);
+
+        // Instruction
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  选择浏览器，Enter 确认，Esc 返回",
+                Style::default().fg(Theme::FG),
+            ))),
+            rows[1],
+        );
+
+        // Browser list
+        let items: Vec<ListItem> = self
+            .browsers
+            .iter()
+            .enumerate()
+            .map(|(i, (_name, display))| {
+                let prefix = if i == self.selected_browser {
+                    "  ▸ "
+                } else {
+                    "    "
+                };
+                let style = if i == self.selected_browser {
+                    Style::default()
+                        .fg(Theme::ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Theme::MUTED)
+                };
+                ListItem::new(Line::from(Span::styled(
+                    format!("{prefix}{display}"),
+                    style,
+                )))
+            })
+            .collect();
+
+        f.render_widget(List::new(items), rows[3]);
+
+        // Show error if any
+        if let Some(ref err) = self.error {
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("  ✘ {err}"),
+                    Style::default().fg(Theme::DANGER),
+                ))),
+                rows[5],
+            );
+        }
+    }
+
     // ── Events ──────────────────────────────────────────────────────────────
 
     pub fn handle_event(&mut self, evt: &Event) -> PageAction {
@@ -189,6 +273,37 @@ impl LoginPage {
             return PageAction::None;
         }
 
+        // Handle browser import state separately
+        if self.qr_state == QrLoginState::BrowserImport {
+            return match k.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.selected_browser = self.selected_browser.saturating_sub(1);
+                    PageAction::None
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.selected_browser + 1 < self.browsers.len() {
+                        self.selected_browser += 1;
+                    }
+                    PageAction::None
+                }
+                KeyCode::Enter => {
+                    let browser = self.browsers[self.selected_browser].0.to_string();
+                    PageAction::BrowserImportConfirm(browser)
+                }
+                KeyCode::Esc => {
+                    // Go back to QR state
+                    if self.unikey.is_some() {
+                        self.qr_state = QrLoginState::WaitingScan;
+                    } else {
+                        self.qr_state = QrLoginState::WaitingForQr;
+                    }
+                    self.error = None;
+                    PageAction::None
+                }
+                _ => PageAction::None,
+            };
+        }
+
         match k.code {
             KeyCode::Esc => PageAction::Pop,
             KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -197,6 +312,11 @@ impl LoginPage {
                 self.unikey = None;
                 self.error = None;
                 PageAction::QrRefresh
+            }
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                self.qr_state = QrLoginState::BrowserImport;
+                self.error = None;
+                PageAction::None
             }
             _ => PageAction::None,
         }
@@ -228,8 +348,14 @@ impl LoginPage {
             QrLoginState::Scanned => Theme::INFO,
             QrLoginState::Success => Theme::SUCCESS,
             QrLoginState::Expired => Theme::DANGER,
+            QrLoginState::BrowserImport => Theme::MODE_NORMAL,
         };
-        ("QR LOGIN".into(), color)
+        let label = if self.qr_state == QrLoginState::BrowserImport {
+            "IMPORT"
+        } else {
+            "QR LOGIN"
+        };
+        (label.into(), color)
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
@@ -239,14 +365,23 @@ impl LoginPage {
             QrLoginState::Scanned => "已扫码",
             QrLoginState::Success => "已登录",
             QrLoginState::Expired => "已过期",
+            QrLoginState::BrowserImport => "选择浏览器",
         };
         vec![Span::styled(text.to_string(), Style::default().fg(Theme::MUTED))]
     }
 
     pub fn hints(&self) -> Vec<KeyHint> {
-        vec![
+        let mut hints = vec![
             KeyHint::new("R", "refresh"),
+            KeyHint::new("I", "import cookies"),
             KeyHint::new("Esc", "back"),
-        ]
+        ];
+        if self.qr_state == QrLoginState::BrowserImport {
+            hints.clear();
+            hints.push(KeyHint::new("↑↓", "select"));
+            hints.push(KeyHint::new("Enter", "confirm"));
+            hints.push(KeyHint::new("Esc", "back"));
+        }
+        hints
     }
 }

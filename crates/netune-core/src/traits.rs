@@ -40,6 +40,9 @@ pub trait NeteaseClient: Send + Sync {
 
     /// Get personal FM.
     async fn personal_fm(&self) -> Result<Vec<Song>>;
+
+    /// Import cookies from a local browser to bypass QR login.
+    async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>>;
 }
 
 /// Player trait — audio playback operations.
@@ -149,6 +152,10 @@ mod tests {
 
         async fn personal_fm(&self) -> Result<Vec<Song>> {
             Ok(vec![])
+        }
+
+        async fn import_browser_cookies(&self, _browser: &str) -> Result<Option<UserProfile>> {
+            Ok(None)
         }
     }
 

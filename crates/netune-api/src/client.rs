@@ -482,6 +482,73 @@ impl NeteaseClient for NeteaseApiClient {
         let songs = tracks.into_iter().map(Self::track_to_song).collect();
         Ok(songs)
     }
+
+    async fn import_browser_cookies(&self, browser: &str) -> Result<Option<UserProfile>> {
+        let domains = vec!["music.163.com".to_string()];
+        let cookies = match browser {
+            "chrome" => rookie::chrome(Some(domains)),
+            "firefox" => rookie::firefox(Some(domains)),
+            "edge" => rookie::edge(Some(domains)),
+            "brave" => rookie::brave(Some(domains)),
+            "chromium" => rookie::chromium(Some(domains)),
+            _ => {
+                return Err(netune_core::NetuneError::Network(format!(
+                    "Unsupported browser: {browser}"
+                )))
+            }
+        }
+        .map_err(|e| {
+            netune_core::NetuneError::Network(format!(
+                "Failed to read cookies from {browser}: {e}. Make sure the browser is closed."
+            ))
+        })?;
+
+        // Find MUSIC_U cookie
+        let music_u = cookies
+            .iter()
+            .find(|c| c.name == "MUSIC_U")
+            .ok_or_else(|| {
+                netune_core::NetuneError::Auth(
+                    "MUSIC_U cookie not found. Please login to music.163.com in your browser first."
+                        .into(),
+                )
+            })?;
+
+        // Set the cookie in our jar
+        let base_url: reqwest::Url = self
+            .base_url
+            .parse()
+            .map_err(|e| netune_core::NetuneError::Network(format!("url parse: {e}")))?;
+        self.cookie_jar
+            .add_cookie_str(&format!("MUSIC_U={}", music_u.value), &base_url);
+
+        // Also import __csrf if available
+        if let Some(csrf) = cookies.iter().find(|c| c.name == "__csrf") {
+            self.cookie_jar
+                .add_cookie_str(&format!("__csrf={}", csrf.value), &base_url);
+        }
+
+        tracing::info!(browser = %browser, "Imported cookies from browser");
+
+        // Validate by fetching user profile
+        match self.fetch_current_user_profile().await {
+            Ok(profile) => {
+                *self.login_state.write().await = LoginState::LoggedIn(profile.clone());
+                tracing::info!(
+                    nickname = %profile.nickname,
+                    uid = profile.uid,
+                    "Browser cookie login succeeded"
+                );
+                Ok(Some(profile))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Imported cookies are invalid or expired");
+                Err(netune_core::NetuneError::Auth(format!(
+                    "Imported cookies are invalid: {e}"
+                )))
+            }
+        }
+    }
 }
 
 /// Parse an LRC-format lyric string into `Vec<LyricLine>`.

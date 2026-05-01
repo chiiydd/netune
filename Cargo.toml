@@ -75,6 +75,7 @@ chrono   = "0.4"
 qrcode   = "0.14"
 async-trait = "0.1"
 urlencoding = "2"
+rookie      = "0.5"
 
 # ─── Build profiles ──────────────────────────────────────────────────────────
 [workspace.lints.clippy]

@@ -25,6 +25,7 @@ async-trait = { workspace = true }
 urlencoding = { workspace = true }
 chrono      = { workspace = true }
 qrcode      = { workspace = true }
+rookie      = { workspace = true }
 
 [lints]
 workspace = true

@@ -37,6 +37,8 @@ pub enum PageAction {
     QrCheckPoll,
     /// QR login: refresh QR code.
     QrRefresh,
+    /// Browser cookie import: import cookies from a local browser.
+    BrowserImportConfirm(String),
     /// Search page submits a query.
     Search(String),
     /// Play a specific song (from search results or playlist tracks).
