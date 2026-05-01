@@ -20,6 +20,8 @@ use netune_core::models::Lyrics;
 use netune_core::models::Song;
 use netune_player::PlayMode;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
 use crate::theme::Theme;
@@ -155,10 +157,7 @@ impl PlayerPage {
         lines.push(Line::from(Span::styled(border, Style::default().fg(bc))));
 
         // Line 1: blank
-        lines.push(Line::from(Span::styled(
-            format!("│{:<w$}│", "", w = box_w),
-            Style::default().fg(bc),
-        )));
+        lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
         if self.loading {
             // Loading state
@@ -223,17 +222,14 @@ impl PlayerPage {
                 Span::styled("●", Style::default().fg(Theme::ACCENT)),
                 Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
             ]);
-            lines.push(Line::from(Span::styled(
-                format!("│{:<w$}│", "", w = box_w),
-                Style::default().fg(bc),
-            )));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             // We need to render the progress line inside the box
             // Use make_boxed_line but with custom spans
             lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
 
             // Line 6: time
-            let time_padding = (box_w.saturating_sub(time_str.len())) / 2;
-            let time_display = format!("{:>pad$}", "", pad = time_padding) + &time_str;
+            let time_padding = (box_w.saturating_sub(display_width(&time_str))) / 2;
+            let time_display = " ".repeat(time_padding) + &time_str;
             lines.push(self.make_boxed_line(&time_display, Style::default().fg(Theme::FG_DIM), bc, box_w));
 
             // Line 7: blank
@@ -287,22 +283,23 @@ impl PlayerPage {
 
     /// Helper: build a box row `│ text... │` with centered-ish padding.
     fn make_boxed_line(&self, text: &str, style: Style, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
-        let content = format!("{:<w$}", text, w = box_w);
+        let text_w = display_width(text);
+        let pad = box_w.saturating_sub(text_w);
         Line::from(vec![
             Span::styled("│", Style::default().fg(bc)),
-            Span::styled(content, style),
+            Span::styled(text.to_string(), style),
+            Span::styled(" ".repeat(pad), Style::default()),
             Span::styled("│", Style::default().fg(bc)),
         ])
     }
 
     /// Helper: embed a rich Line inside a box row.
     fn make_boxed_line_spans(&self, inner: Line<'static>, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
-        // Calculate text width of inner line
-        let text_w: usize = inner.spans.iter().map(|s| s.content.len()).sum();
+        let text_w: usize = inner.spans.iter().map(|s| display_width(&s.content)).sum();
         let pad = box_w.saturating_sub(text_w);
         let mut spans = vec![Span::styled("│", Style::default().fg(bc))];
         spans.extend(inner.spans);
-        spans.push(Span::styled(format!("{:<w$}", "", w = pad), Style::default()));
+        spans.push(Span::styled(" ".repeat(pad), Style::default()));
         spans.push(Span::styled("│", Style::default().fg(bc)));
         Line::from(spans)
     }
@@ -496,4 +493,8 @@ fn format_duration(d: Duration) -> String {
     let mins = total_secs / 60;
     let secs = total_secs % 60;
     format!("{mins}:{secs:02}")
+}
+
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
 }
