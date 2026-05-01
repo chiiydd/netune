@@ -159,19 +159,7 @@ impl PlayerPage {
         // Line 1: blank
         lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
-        if self.loading {
-            // Loading state
-            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let frame = SPINNER[self.loading_tick % SPINNER.len()];
-            let loading_text = format!("{frame} Loading...");
-            lines.push(self.make_boxed_line(&loading_text, Style::default().fg(Theme::ACCENT), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-        } else if self.song.is_none() {
+        if self.song.is_none() {
             // No song
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("No song playing", Style::default().fg(Theme::MUTED), bc, box_w));
@@ -181,7 +169,7 @@ impl PlayerPage {
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
         } else {
-            // ── Song info ──
+            // ── Song info (always shown when song exists) ──
             // Line 2: title
             lines.push(self.make_boxed_line(
                 &title,
@@ -201,38 +189,50 @@ impl PlayerPage {
             // Line 4: blank
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
-            // ── Progress bar ──
-            // Line 5:  ▶ ━━━━━━━━━━━━●━━━━━━━━━━━━━━
-            let bar_width = 36usize;
-            let elapsed_str = format_duration(self.elapsed);
-            let total_str = format_duration(self.duration);
-            let time_str = format!("{elapsed_str} / {total_str}");
-
-            let filled = (self.progress * bar_width as f64) as usize;
-            let filled = filled.min(bar_width);
-            let empty = bar_width.saturating_sub(filled);
-            let filled_bar: String = "━".repeat(filled.saturating_sub(1));
-            let empty_bar: String = "░".repeat(empty);
-            // Build progress line spans
-            let prog_line = Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Theme::ACCENT)),
-                Span::styled(filled_bar, Style::default().fg(Theme::ACCENT)),
-                Span::styled("●", Style::default().fg(Theme::ACCENT)),
-                Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
-            ]);
+            // ── Progress bar or loading spinner ──
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            // We need to render the progress line inside the box
-            // Use make_boxed_line but with custom spans
-            lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
 
-            // Line 6: time
-            lines.push(self.make_boxed_line(&time_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
+            if self.loading {
+                const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let frame = SPINNER[self.loading_tick % SPINNER.len()];
+                let bar_width = 36usize;
+                let spinner_text = format!("{frame} Loading...");
+                let spinner_w = display_width(&spinner_text);
+                let pad = bar_width.saturating_sub(spinner_w);
+                let left = pad / 2;
+                let right = pad - left;
+                let prog_line = Line::from(vec![
+                    Span::styled(" ".repeat(left), Style::default()),
+                    Span::styled(spinner_text, Style::default().fg(Theme::ACCENT)),
+                    Span::styled(" ".repeat(right), Style::default()),
+                ]);
+                lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
+                lines.push(self.make_boxed_line("--:-- / --:--", Style::default().fg(Theme::FG_DIM), bc, box_w));
+            } else {
+                let bar_width = 36usize;
+                let elapsed_str = format_duration(self.elapsed);
+                let total_str = format_duration(self.duration);
+                let time_str = format!("{elapsed_str} / {total_str}");
+
+                let filled = (self.progress * bar_width as f64) as usize;
+                let filled = filled.min(bar_width);
+                let empty = bar_width.saturating_sub(filled);
+                let filled_bar: String = "━".repeat(filled.saturating_sub(1));
+                let empty_bar: String = "░".repeat(empty);
+                let prog_line = Line::from(vec![
+                    Span::styled("▶ ", Style::default().fg(Theme::ACCENT)),
+                    Span::styled(filled_bar, Style::default().fg(Theme::ACCENT)),
+                    Span::styled("●", Style::default().fg(Theme::ACCENT)),
+                    Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
+                ]);
+                lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
+                lines.push(self.make_boxed_line(&time_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
+            }
 
             // Line 7: blank
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
             // ── Playback controls ──
-            // Line 8:  ◄◄   ▶/❚❚   ►►   🔀
             let controls = if self.is_playing {
                 format!("⏮  ⏸  ⏭  {}", self.play_mode_symbol())
             } else {
@@ -244,7 +244,6 @@ impl PlayerPage {
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
             // ── Volume bar ──
-            // Line 10:  vol ████████░░ 80%
             let vol_bar_w = 16usize;
             let vol_filled = (self.volume as usize * vol_bar_w) / 100;
             let vol_empty = vol_bar_w.saturating_sub(vol_filled);
