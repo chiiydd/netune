@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -30,7 +30,6 @@ pub struct PlayerPage {
     duration: Duration,
     is_playing: bool,
     loading: bool,
-    /// Tick counter for the loading spinner animation.
     loading_tick: usize,
     lyrics: Option<Lyrics>,
     current_lyric_idx: usize,
@@ -61,19 +60,15 @@ impl PlayerPage {
         }
     }
 
-    /// Set the currently playing song and reset state.
     pub fn set_song(&mut self, song: Song) {
         self.duration = Duration::from_millis(song.duration);
         self.song = Some(song);
         self.progress = 0.0;
         self.elapsed = Duration::ZERO;
         self.is_playing = true;
-        // Don't clear lyrics here — they will be set separately via set_lyrics.
-        // Clearing would lose lyrics fetched concurrently with the URL.
         self.current_lyric_idx = 0;
     }
 
-    /// Update playback state from the real player.
     pub fn update_from_player(&mut self, position_secs: f64, duration_secs: f64, is_playing: bool) {
         self.elapsed = Duration::from_secs_f64(position_secs);
         if duration_secs > 0.0 {
@@ -83,28 +78,23 @@ impl PlayerPage {
         self.update_progress();
     }
 
-    /// Set volume display (0-100).
     pub fn set_volume(&mut self, vol: u16) {
         self.volume = vol;
     }
 
-    /// Set lyrics (timestamped, from the API).
     pub fn set_lyrics(&mut self, lyrics: Lyrics) {
         self.lyrics = Some(lyrics);
         self.current_lyric_idx = 0;
     }
 
-    /// Set loading state (shown while audio is buffering).
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
     }
 
-    /// Set the current play mode (for UI display).
     pub fn set_play_mode(&mut self, mode: PlayMode) {
         self.play_mode = mode;
     }
 
-    /// Get the current song (for context display).
     pub fn song(&self) -> Option<&Song> {
         self.song.as_ref()
     }
@@ -116,7 +106,7 @@ impl PlayerPage {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // top spacer
-                Constraint::Length(16), // vinyl record
+                Constraint::Length(18), // vinyl record (3 top + 12 content + 3 bottom)
                 Constraint::Length(1), // separator
                 Constraint::Min(3),    // lyrics
             ])
@@ -124,7 +114,7 @@ impl PlayerPage {
 
         self.render_record(f, chunks[1]);
 
-        // separator line
+        // separator
         let sep = "─".repeat(area.width as usize);
         f.render_widget(
             Paragraph::new(Span::styled(sep, Style::default().fg(Theme::ACCENT_DIM))),
@@ -134,7 +124,30 @@ impl PlayerPage {
         self.render_lyrics(f, chunks[3]);
     }
 
-    /// Build and render the vinyl record centered in the area.
+    /// Render the vinyl record centered in the area.
+    ///
+    /// Record layout (fixed 41 chars wide including tonearm):
+    ///
+    /// ```text
+    ///          ╭─────────────────────╮
+    ///        ╭─│─────────────────────│─╮
+    ///      ╭─│─│─────────────────────│─│─╮
+    ///      │ │ │                     │ │ │
+    ///      │ │ │  Song Title         │ │ │  ╮
+    ///      │ │ │  Artist · Album     │ │ │  │
+    ///      │ │ │                     │ │ │  │
+    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
+    ///      │ │ │    ─ ─ ─ ─ ─       │ │ │  │
+    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
+    ///      │ │ │    ─ ─ ─ ─ ─       │ │ │  │
+    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
+    ///      │ │ │                     │ │ │  │
+    ///      │ │ │  0:45 / 3:45       │ │ │  │
+    ///      │ │ │                     │ │ │  │
+    ///      ╰─│─│─────────────────────│─│─╯  │
+    ///        ╰─│─────────────────────│─╯    │
+    ///          ╰─────────────────────╯      ╯
+    /// ```
     fn render_record(&self, f: &mut Frame, area: Rect) {
         let (title, artists, _album) = self.song_info();
         let time_str = format!(
@@ -143,109 +156,119 @@ impl PlayerPage {
             format_duration(self.duration)
         );
 
-        // Tonearm position: maps progress (0.0-1.0) to content rows 3-13
-        let arm_row = ((self.progress * 10.0) as usize).clamp(0, 10) + 3;
+        // Tonearm: maps progress 0.0-1.0 to content rows 3-14
+        let arm_row = ((self.progress * 11.0) as usize).clamp(0, 11) + 3;
 
-        // Volume grooves: number of groove lines varies with volume
-        let num_grooves = 1 + (self.volume as usize * 4) / 100; // 1-5 groove lines
-        let groove_inner_w = 23; // width inside the record for grooves
-        let filled = (self.volume as usize * groove_inner_w) / 100;
-        let groove_line = format!("{}{}", "─ ".repeat(filled / 2), "─");
+        // Volume grooves
+        let num_grooves = 1 + (self.volume as usize * 4) / 100; // 1-5
+        let filled = ((self.volume as f64 / 100.0) * 10.0) as usize;
+        let groove = if filled > 0 {
+            "─ ".repeat(filled).trim_end().to_string()
+        } else {
+            "─".to_string()
+        };
 
-        // Build record lines (16 total)
-        let mut lines: Vec<Line> = Vec::with_capacity(16);
+        let bc = Theme::ACCENT_DIM;
+        let groove_w = 21; // content width inside record borders
 
-        // Row 0: outer top cap
+        // Helper: content row with borders + optional tonearm
+        let make_row = |row: usize, text: &str, style: Style| -> Line<'static> {
+            let padded = format!("{:<width$}", text, width = groove_w);
+            let arm = if row == arm_row {
+                "  ╮"
+            } else if row > arm_row && row <= 14 {
+                "  │"
+            } else {
+                "   "
+            };
+            Line::from(vec![
+                Span::styled("      │ │ │ ", Style::default().fg(bc)),
+                Span::styled(padded, style),
+                Span::styled(" │ │ │", Style::default().fg(bc)),
+                Span::styled(arm.to_string(), Style::default().fg(Theme::MUTED)),
+            ])
+        };
+
+        let blank = || make_row(0, "", Style::default());
+
+        let mut lines: Vec<Line> = Vec::with_capacity(18);
+
+        // ── Top borders ──
         lines.push(Line::from(Span::styled(
-            format!("    ╭{}╮", "─".repeat(33)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("          ╭{}╮", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
-        // Row 1: second rim
         lines.push(Line::from(Span::styled(
-            format!("  ╭─{}│─╮", "─".repeat(30)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("        ╭─│{}│─╮", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
-        // Row 2: third rim
         lines.push(Line::from(Span::styled(
-            format!("╭─│─{}│─│╮", "─".repeat(28)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("      ╭─│─│{}│─│─╮", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
 
-        // Content rows (rows 3-13, 11 rows)
-        let mut content: Vec<(String, bool)> = Vec::with_capacity(11);
+        // ── Content rows (12 rows: index 3-14) ──
         // Row 3: blank
-        content.push((String::new(), false));
+        lines.push(blank());
+
         // Row 4: title
         if self.loading {
             const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let frame = SPINNER[self.loading_tick % SPINNER.len()];
-            content.push((format!("{frame} Loading..."), true));
+            lines.push(make_row(
+                4,
+                &format!("{frame} Loading..."),
+                Style::default().fg(Theme::ACCENT),
+            ));
         } else {
-            content.push((title, true));
-        }
-        // Row 5: artist
-        content.push((artists, true));
-        // Row 6: blank
-        content.push((String::new(), false));
-        // Rows 7-(6+num_grooves): volume grooves
-        for i in 0..num_grooves.min(5) {
-            let indent = if i % 2 == 0 { "  " } else { "   " };
-            content.push((format!("{indent}{groove_line}"), true));
-        }
-        // Fill remaining groove slots with blank to keep consistent row count
-        for _ in num_grooves..5 {
-            content.push((String::new(), false));
-        }
-        // Row 12: blank (after grooves)
-        content.push((String::new(), false));
-        // Row 13: time
-        content.push((time_str, true));
-
-        // Render content rows with side borders and optional tonearm
-        for (i, (text, _)) in content.iter().enumerate() {
-            let row = i + 3; // absolute row index
-            let arm = if row == arm_row { "──╯" } else { "   " };
-            let arm_style = if row == arm_row {
-                Style::default().fg(Theme::MUTED)
-            } else {
-                Style::default()
-            };
-
-            let title_style = if row == 4 {
+            lines.push(make_row(
+                4,
+                &title,
                 Style::default()
                     .fg(Theme::FG)
-                    .add_modifier(Modifier::BOLD)
-            } else if row == 5 {
-                Style::default().fg(Theme::ACCENT)
-            } else if row == 13 {
-                Style::default().fg(Theme::FG_DIM)
-            } else {
-                Style::default().fg(Theme::MUTED)
-            };
-
-            let padded = format!("{:<28}", text);
-            lines.push(Line::from(vec![
-                Span::styled("│  ", Style::default().fg(Theme::ACCENT_DIM)),
-                Span::styled(padded, title_style),
-                Span::styled("│", Style::default().fg(Theme::ACCENT_DIM)),
-                Span::styled(arm, arm_style),
-            ]));
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
 
-        // Row 14: third rim bottom
+        // Row 5: artist
+        lines.push(make_row(5, &artists, Style::default().fg(Theme::ACCENT)));
+
+        // Row 6: blank
+        lines.push(make_row(6, "", Style::default()));
+
+        // Rows 7-11: volume grooves (up to 5 lines)
+        for i in 0..5 {
+            let row = 7 + i;
+            if i < num_grooves.min(5) {
+                let indent = if i % 2 == 0 { " " } else { "  " };
+                let g = format!("{}{}", indent, groove);
+                lines.push(make_row(row, &g, Style::default().fg(Theme::MUTED)));
+            } else {
+                lines.push(make_row(row, "", Style::default()));
+            }
+        }
+
+        // Row 12: blank
+        lines.push(make_row(12, "", Style::default()));
+
+        // Row 13: time
+        lines.push(make_row(13, &time_str, Style::default().fg(Theme::FG_DIM)));
+
+        // Row 14: blank
+        lines.push(make_row(14, "", Style::default()));
+
+        // ── Bottom borders (mirror of top) ──
         lines.push(Line::from(Span::styled(
-            format!("╰─│─{}│─│╯", "─".repeat(28)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("      ╰─│─│{}│─│─╯", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
-        // Row 15: second rim bottom
         lines.push(Line::from(Span::styled(
-            format!("  ╰─{}│─╯", "─".repeat(30)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("        ╰─│{}│─╯", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
-        // Row 16: outer bottom cap
         lines.push(Line::from(Span::styled(
-            format!("    ╰{}╯", "─".repeat(33)),
-            Style::default().fg(Theme::ACCENT_DIM),
+            format!("          ╰{}╯", "─".repeat(groove_w)),
+            Style::default().fg(bc),
         )));
 
         // Center vertically and render line by line
@@ -262,7 +285,6 @@ impl PlayerPage {
         }
     }
 
-    /// Extract (title, artists, album) from the current song.
     fn song_info(&self) -> (String, String, String) {
         match &self.song {
             Some(song) => {
@@ -282,7 +304,7 @@ impl PlayerPage {
         }
     }
 
-    /// Lyrics with current line highlighted, no border.
+    /// Lyrics with current line highlighted, centered horizontally.
     fn render_lyrics(&self, f: &mut Frame, area: Rect) {
         let inner_height = area.height as usize;
 
@@ -299,7 +321,6 @@ impl PlayerPage {
                 let total = lyrics.lines.len();
                 let idx = self.current_lyric_idx.min(total.saturating_sub(1));
 
-                // Center current lyric line in the visible area.
                 let half = inner_height / 2;
                 let start = idx.saturating_sub(half);
                 let end = (start + inner_height).min(total);
@@ -328,7 +349,12 @@ impl PlayerPage {
             }
         };
 
-        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+        f.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .alignment(Alignment::Center),
+            area,
+        );
     }
 
     // ── Events ──────────────────────────────────────────────────────────────
@@ -357,14 +383,12 @@ impl PlayerPage {
     // ── Tick ────────────────────────────────────────────────────────────────
 
     pub fn tick(&mut self) {
-        // Advance loading spinner animation.
         if self.loading {
             self.loading_tick = self.loading_tick.wrapping_add(1);
         }
         if !self.is_playing {
             return;
         }
-        // Advance by ~100 ms (the app tick interval).
         let tick_dur = Duration::from_millis(100);
         self.elapsed = (self.elapsed + tick_dur).min(self.duration);
         self.update_progress();
@@ -388,7 +412,6 @@ impl PlayerPage {
             return;
         }
         let position_ms = self.elapsed.as_millis() as u64;
-        // Find the last lyric line whose timestamp <= current position.
         self.current_lyric_idx = lyrics
             .lines
             .iter()
