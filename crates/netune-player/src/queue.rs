@@ -104,6 +104,16 @@ impl PlayQueue {
         }
     }
 
+    /// Skip directly to a specific index and return that song.
+    pub fn skip_to(&mut self, idx: usize) -> Option<&Song> {
+        if idx < self.songs.len() {
+            self.current = idx;
+            self.songs.get(self.current)
+        } else {
+            None
+        }
+    }
+
     /// Advance to the next song based on play mode.
     pub fn advance(&mut self) -> Option<&Song> {
         if self.songs.is_empty() {

@@ -823,6 +823,15 @@ impl App {
                 self.do_play_next().await;
             }
 
+            // ── Play queue from specific index ────────────────────────
+            PageAction::PlayQueueFrom(songs, idx) => {
+                self.play_queue.load(songs);
+                if let Some(song) = self.play_queue.skip_to(idx) {
+                    let song = song.clone();
+                    self.do_play_song(song).await;
+                }
+            }
+
             // ── Auto-advance to next song ───────────────────────────────
             PageAction::PlayNext => {
                 self.do_play_next().await;
@@ -836,6 +845,7 @@ impl App {
                 match client.playlist_detail(playlist_id).await {
                     Ok(tracks) => {
                         self.play_queue.load(tracks.clone());
+                        self.do_play_next().await;
                         for page in &mut self.page_stack {
                             if let Page::Playlist(pp) = page {
                                 pp.set_tracks(tracks);

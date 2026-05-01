@@ -276,9 +276,8 @@ impl PlaylistPage {
                     .select(Some(i.checked_sub(1).unwrap_or(len - 1)));
             }
             KeyCode::Enter if len > 0 => {
-                if let Some(song) = self.selected_track().cloned() {
-                    return PageAction::PlaySong(song);
-                }
+                let idx = self.tracks_state.selected().unwrap_or(0);
+                return PageAction::PlayQueueFrom(self.tracks.clone(), idx);
             }
             KeyCode::Char('a') if len > 0 => {
                 if let Some(song) = self.selected_track().cloned() {
