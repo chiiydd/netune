@@ -20,8 +20,8 @@ impl Theme {
 
     // ── Neutral ──────────────────────────────────────────────────────────────
     pub const FG: Color = Color::White;
-    pub const FG_DIM: Color = Color::Gray;
-    pub const MUTED: Color = Color::DarkGray;
+    pub const FG_DIM: Color = Color::Rgb(180, 180, 180);
+    pub const MUTED: Color = Color::Rgb(128, 128, 128);
     pub const BG: Color = Color::Reset;
 
     // ── Selection ────────────────────────────────────────────────────────────
