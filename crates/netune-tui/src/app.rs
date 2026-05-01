@@ -652,12 +652,23 @@ impl App {
                 // Sync current playback state into a newly pushed PlayerPage.
                 if is_player {
                     self.sync_player_state();
-                    // Also set play mode from queue.
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
                             pp.set_play_mode(self.play_queue.mode());
+                            if pp.song().is_none() {
+                                if let Some(song) = self.play_queue.current() {
+                                    pp.set_song(song.clone());
+                                }
+                            }
                             break;
                         }
+                    }
+                    // If nothing is playing but the queue has songs, start
+                    // playing from the current position.
+                    let should_autoplay = self.player.as_ref().is_none_or(|p| !p.is_playing())
+                        && self.play_queue.current().is_some();
+                    if should_autoplay {
+                        self.do_play_next().await;
                     }
                 }
             }
