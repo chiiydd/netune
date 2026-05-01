@@ -121,17 +121,18 @@ impl PlayQueue {
         }
         match self.mode {
             PlayMode::Sequential => {
-                if self.current + 1 < self.songs.len() {
-                    self.history.push(self.current);
-                    self.current += 1;
+                if self.current + 1 >= self.songs.len() {
+                    return None; // No more songs.
                 }
+                self.history.push(self.current);
+                self.current += 1;
             }
             PlayMode::LoopAll => {
                 self.history.push(self.current);
                 self.current = (self.current + 1) % self.songs.len();
             }
             PlayMode::LoopOne => {
-                // Stay on current.
+                // Stay on current — re-play.
             }
             PlayMode::Shuffle => {
                 use std::time::{SystemTime, UNIX_EPOCH};
@@ -324,8 +325,8 @@ mod tests {
 
         assert_eq!(q.advance().unwrap().name, "Song B");
         assert_eq!(q.advance().unwrap().name, "Song C");
-        // At the end — should stay on the last song.
-        assert_eq!(q.advance().unwrap().name, "Song C");
+        // At the end — should return None (no more songs).
+        assert!(q.advance().is_none());
         assert_eq!(q.current_index(), 2);
     }
 

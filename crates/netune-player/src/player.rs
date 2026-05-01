@@ -45,6 +45,13 @@ impl Default for NetunePlayer {
 #[async_trait]
 impl AudioPlayer for NetunePlayer {
     async fn play(&self, url: &str) -> Result<()> {
+        // Stop old playback before starting new.
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(old) = state.take() {
+                old.player.stop();
+            }
+        }
+
         // Download the audio data from the URL.
         let bytes = reqwest::get(url)
             .await
@@ -101,6 +108,13 @@ impl AudioPlayer for NetunePlayer {
     }
 
     fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
+        // Stop old playback before starting new.
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(old) = state.take() {
+                old.player.stop();
+            }
+        }
+
         // Create decoder directly from pre-fetched bytes (skip download).
         let cursor = Cursor::new(bytes);
         let decoder = Decoder::new(cursor)

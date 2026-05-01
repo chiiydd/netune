@@ -234,9 +234,9 @@ impl PlayerPage {
             // ── Playback controls ──
             // Line 8:  ◄◄   ▶/❚❚   ►►   🔀
             let controls = if self.is_playing {
-                format!("⏮  ▶❚❚  ⏭  {}", self.play_mode_symbol())
+                format!("⏮  ⏸  ⏭  {}", self.play_mode_symbol())
             } else {
-                format!("⏮   ▶   ⏭  {}", self.play_mode_symbol())
+                format!("⏮  ▶  ⏭  {}", self.play_mode_symbol())
             };
             lines.push(self.make_boxed_line(&controls, Style::default().fg(Theme::MUTED), bc, box_w));
 
