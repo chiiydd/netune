@@ -465,11 +465,9 @@ impl App {
         if let Some(ref player) = self.player {
             let pos = player.position();
             let dur = player.duration();
-            let playing = player.is_playing();
-            // Song finished: position >= duration (with small tolerance), and not playing
-            if dur > 0.0 && pos >= dur - 0.5 && !playing {
+            // Song finished: position within a 1.5s window past duration
+            if dur > 0.0 && pos >= dur - 0.5 && pos < dur + 2.0 {
                 tracing::info!(pos, dur, "Song finished, auto-advancing");
-                // Return PlayNext action — will be handled by apply_action
                 return PageAction::PlayNext;
             }
         }

@@ -1,10 +1,11 @@
-//! Player page — full-screen vinyl record player design.
+//! Player page — MP3 player device design.
 //!
-//! A decorative vinyl record sits centered in the page with:
-//! - Song title + artist inside the record grooves
-//! - Volume represented as groove density
-//! - Tonearm tracks progress across the record
-//! - Lyrics scroll below the record
+//! A classic MP3 player rendered with box-drawing characters:
+//! - Song title + artist in the display area
+//! - Progress bar with elapsed/total time
+//! - Playback controls (prev, play/pause, next, shuffle)
+//! - Volume bar
+//! - Lyrics scroll below the player
 
 use std::time::Duration;
 
@@ -106,13 +107,13 @@ impl PlayerPage {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1), // top spacer
-                Constraint::Length(18), // vinyl record (3 top + 12 content + 3 bottom)
+                Constraint::Length(14), // MP3 player box
                 Constraint::Length(1), // separator
                 Constraint::Min(3),    // lyrics
             ])
             .split(area);
 
-        self.render_record(f, chunks[1]);
+        self.render_player(f, chunks[1]);
 
         // separator
         let sep = "─".repeat(area.width as usize);
@@ -124,154 +125,153 @@ impl PlayerPage {
         self.render_lyrics(f, chunks[3]);
     }
 
-    /// Render the vinyl record centered in the area.
-    ///
-    /// Record layout (fixed 41 chars wide including tonearm):
+    /// Render the MP3 player device centered in the area.
     ///
     /// ```text
-    ///          ╭─────────────────────╮
-    ///        ╭─│─────────────────────│─╮
-    ///      ╭─│─│─────────────────────│─│─╮
-    ///      │ │ │                     │ │ │
-    ///      │ │ │  Song Title         │ │ │  ╮
-    ///      │ │ │  Artist · Album     │ │ │  │
-    ///      │ │ │                     │ │ │  │
-    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
-    ///      │ │ │    ─ ─ ─ ─ ─       │ │ │  │
-    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
-    ///      │ │ │    ─ ─ ─ ─ ─       │ │ │  │
-    ///      │ │ │   ─ ─ ─ ─ ─ ─      │ │ │  │
-    ///      │ │ │                     │ │ │  │
-    ///      │ │ │  0:45 / 3:45       │ │ │  │
-    ///      │ │ │                     │ │ │  │
-    ///      ╰─│─│─────────────────────│─│─╯  │
-    ///        ╰─│─────────────────────│─╯    │
-    ///          ╰─────────────────────╯      ╯
-    /// ```
-    fn render_record(&self, f: &mut Frame, area: Rect) {
-        let (title, artists, _album) = self.song_info();
-        let time_str = format!(
-            "{} / {}",
-            format_duration(self.elapsed),
-            format_duration(self.duration)
-        );
-
-        // Tonearm: maps progress 0.0-1.0 to content rows 3-14
-        let arm_row = ((self.progress * 11.0) as usize).clamp(0, 11) + 3;
-
-        // Volume grooves
-        let num_grooves = 1 + (self.volume as usize * 4) / 100; // 1-5
-        let filled = ((self.volume as f64 / 100.0) * 10.0) as usize;
-        let groove = if filled > 0 {
-            "─ ".repeat(filled).trim_end().to_string()
-        } else {
-            "─".to_string()
-        };
-
+    ///  ╭──────────────────────────────────────────────╮
+    ///  │                                              │
+    ///  │          Song Title Here                     │
+    ///  │          Artist Name · Album Name            │
+    ///  │                                              │
+    ///  │     ▶ ━━━━━━━━━━━━━●━━━━━━━━━━━━━━━━        │
+    ///  │              1:23 / 3:45                     │
+    ///  │                                              │
+    ///  │           ◄◄   ▶/❚❚   ►►   🔀              │
+    ///  │                                              │
+    ///  │       vol ████████░░ 80%                     │
+    ///  │                                              │
+    ///  ╰──────────────────────────────────────────────╯
+    ///  ```
+    fn render_player(&self, f: &mut Frame, area: Rect) {
+        let (title, artists, album) = self.song_info();
         let bc = Theme::ACCENT_DIM;
-        let groove_w = 21; // content width inside record borders
+        let box_w = 48usize; // inner content width
+        let border = format!("╭{}╮", "─".repeat(box_w));
+        let bottom_border = format!("╰{}╯", "─".repeat(box_w));
 
-        // Helper: content row with borders + optional tonearm
-        let make_row = |row: usize, text: &str, style: Style| -> Line<'static> {
-            let padded = format!("{:<width$}", text, width = groove_w);
-            let arm = if row == arm_row {
-                "  ╮"
-            } else if row > arm_row && row <= 14 {
-                "  │"
-            } else {
-                "   "
-            };
-            Line::from(vec![
-                Span::styled("      │ │ │ ", Style::default().fg(bc)),
-                Span::styled(padded, style),
-                Span::styled(" │ │ │", Style::default().fg(bc)),
-                Span::styled(arm.to_string(), Style::default().fg(Theme::MUTED)),
-            ])
-        };
+        let mut lines: Vec<Line> = Vec::with_capacity(14);
 
-        let blank = || make_row(0, "", Style::default());
+        // Line 0: top border
+        lines.push(Line::from(Span::styled(border, Style::default().fg(bc))));
 
-        let mut lines: Vec<Line> = Vec::with_capacity(18);
-
-        // ── Top borders ──
+        // Line 1: blank
         lines.push(Line::from(Span::styled(
-            format!("          ╭{}╮", "─".repeat(groove_w)),
-            Style::default().fg(bc),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("        ╭─│{}│─╮", "─".repeat(groove_w)),
-            Style::default().fg(bc),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("      ╭─│─│{}│─│─╮", "─".repeat(groove_w)),
+            format!("│{:<w$}│", "", w = box_w),
             Style::default().fg(bc),
         )));
 
-        // ── Content rows (12 rows: index 3-14) ──
-        // Row 3: blank
-        lines.push(blank());
-
-        // Row 4: title
         if self.loading {
+            // Loading state
             const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let frame = SPINNER[self.loading_tick % SPINNER.len()];
-            lines.push(make_row(
-                4,
-                &format!("{frame} Loading..."),
-                Style::default().fg(Theme::ACCENT),
-            ));
+            let loading_text = format!("{frame} Loading...");
+            lines.push(self.make_boxed_line(&loading_text, Style::default().fg(Theme::ACCENT), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+        } else if self.song.is_none() {
+            // No song
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("No song playing", Style::default().fg(Theme::MUTED), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
         } else {
-            lines.push(make_row(
-                4,
+            // ── Song info ──
+            // Line 2: title
+            lines.push(self.make_boxed_line(
                 &title,
-                Style::default()
-                    .fg(Theme::FG)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
+                bc,
+                box_w,
             ));
-        }
 
-        // Row 5: artist
-        lines.push(make_row(5, &artists, Style::default().fg(Theme::ACCENT)));
-
-        // Row 6: blank
-        lines.push(make_row(6, "", Style::default()));
-
-        // Rows 7-11: volume grooves (up to 5 lines)
-        for i in 0..5 {
-            let row = 7 + i;
-            if i < num_grooves.min(5) {
-                let indent = if i % 2 == 0 { " " } else { "  " };
-                let g = format!("{}{}", indent, groove);
-                lines.push(make_row(row, &g, Style::default().fg(Theme::MUTED)));
+            // Line 3: artist · album
+            let info = if album.is_empty() {
+                artists.clone()
             } else {
-                lines.push(make_row(row, "", Style::default()));
-            }
+                format!("{artists} · {album}")
+            };
+            lines.push(self.make_boxed_line(&info, Style::default().fg(Theme::ACCENT), bc, box_w));
+
+            // Line 4: blank
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+
+            // ── Progress bar ──
+            // Line 5:  ▶ ━━━━━━━━━━━━●━━━━━━━━━━━━━━
+            let bar_width = 36usize;
+            let elapsed_str = format_duration(self.elapsed);
+            let total_str = format_duration(self.duration);
+            let time_str = format!("{elapsed_str} / {total_str}");
+
+            let filled = (self.progress * bar_width as f64) as usize;
+            let filled = filled.min(bar_width);
+            let empty = bar_width.saturating_sub(filled);
+            let filled_bar: String = "━".repeat(filled.saturating_sub(1));
+            let empty_bar: String = "░".repeat(empty);
+            // Build progress line spans
+            let indent = "     ";
+            let prog_line = Line::from(vec![
+                Span::styled(indent, Style::default()),
+                Span::styled("▶ ", Style::default().fg(Theme::ACCENT)),
+                Span::styled(filled_bar, Style::default().fg(Theme::ACCENT)),
+                Span::styled("●", Style::default().fg(Theme::ACCENT)),
+                Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
+            ]);
+            lines.push(Line::from(Span::styled(
+                format!("│{:<w$}│", "", w = box_w),
+                Style::default().fg(bc),
+            )));
+            // We need to render the progress line inside the box
+            // Use make_boxed_line but with custom spans
+            lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
+
+            // Line 6: time
+            let time_padding = (box_w.saturating_sub(time_str.len())) / 2;
+            let time_display = format!("{:>pad$}", "", pad = time_padding) + &time_str;
+            lines.push(self.make_boxed_line(&time_display, Style::default().fg(Theme::FG_DIM), bc, box_w));
+
+            // Line 7: blank
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+
+            // ── Playback controls ──
+            // Line 8:  ◄◄   ▶/❚❚   ►►   🔀
+            let controls = if self.is_playing {
+                format!("  ◄◄   ▶❚❚   ►►   {}", self.play_mode_symbol())
+            } else {
+                format!("  ◄◄    ▶    ►►   {}", self.play_mode_symbol())
+            };
+            lines.push(self.make_boxed_line(&controls, Style::default().fg(Theme::MUTED), bc, box_w));
+
+            // Line 9: blank
+            lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
+
+            // ── Volume bar ──
+            // Line 10:  vol ████████░░ 80%
+            let vol_bar_w = 16usize;
+            let vol_filled = (self.volume as usize * vol_bar_w) / 100;
+            let vol_empty = vol_bar_w.saturating_sub(vol_filled);
+            let vol_str = format!(
+                "     vol {}{} {}%",
+                "█".repeat(vol_filled),
+                "░".repeat(vol_empty),
+                self.volume
+            );
+            lines.push(self.make_boxed_line(&vol_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
         }
 
-        // Row 12: blank
-        lines.push(make_row(12, "", Style::default()));
+        // Line 11: blank
+        lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
-        // Row 13: time
-        lines.push(make_row(13, &time_str, Style::default().fg(Theme::FG_DIM)));
+        // Line 12: bottom border
+        lines.push(Line::from(Span::styled(bottom_border, Style::default().fg(bc))));
 
-        // Row 14: blank
-        lines.push(make_row(14, "", Style::default()));
-
-        // ── Bottom borders (mirror of top) ──
-        lines.push(Line::from(Span::styled(
-            format!("      ╰─│─│{}│─│─╯", "─".repeat(groove_w)),
-            Style::default().fg(bc),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("        ╰─│{}│─╯", "─".repeat(groove_w)),
-            Style::default().fg(bc),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("          ╰{}╯", "─".repeat(groove_w)),
-            Style::default().fg(bc),
-        )));
-
-        // Center vertically and render line by line
+        // Center vertically and render
         let total = lines.len() as u16;
         let start_y = area.y + area.height.saturating_sub(total) / 2;
         for (i, line) in lines.into_iter().enumerate() {
@@ -282,6 +282,37 @@ impl PlayerPage {
                     Rect::new(area.x, y, area.width, 1),
                 );
             }
+        }
+    }
+
+    /// Helper: build a box row `│ text... │` with centered-ish padding.
+    fn make_boxed_line(&self, text: &str, style: Style, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
+        let content = format!("{:<w$}", text, w = box_w);
+        Line::from(vec![
+            Span::styled("│", Style::default().fg(bc)),
+            Span::styled(content, style),
+            Span::styled("│", Style::default().fg(bc)),
+        ])
+    }
+
+    /// Helper: embed a rich Line inside a box row.
+    fn make_boxed_line_spans(&self, inner: Line<'static>, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
+        // Calculate text width of inner line
+        let text_w: usize = inner.spans.iter().map(|s| s.content.len()).sum();
+        let pad = box_w.saturating_sub(text_w);
+        let mut spans = vec![Span::styled("│", Style::default().fg(bc))];
+        spans.extend(inner.spans);
+        spans.push(Span::styled(format!("{:<w$}", "", w = pad), Style::default()));
+        spans.push(Span::styled("│", Style::default().fg(bc)));
+        Line::from(spans)
+    }
+
+    fn play_mode_symbol(&self) -> &'static str {
+        match self.play_mode {
+            PlayMode::Sequential => "⇄",
+            PlayMode::LoopAll => "🔁",
+            PlayMode::LoopOne => "🔂",
+            PlayMode::Shuffle => "🔀",
         }
     }
 
