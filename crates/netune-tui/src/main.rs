@@ -1,6 +1,7 @@
 //! netune — terminal Netease Cloud Music player.
 
 mod app;
+mod audio_cache;
 mod chrome;
 mod pages;
 mod theme;

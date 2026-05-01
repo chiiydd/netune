@@ -5,8 +5,7 @@
 //! they want; `apply_action` executes those actions (API calls, playback
 //! control) and feeds results back into the appropriate pages.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
@@ -19,7 +18,7 @@ use netune_api::NeteaseApiClient;
 use netune_core::config::Config;
 use netune_core::models::{Song, UserProfile};
 use netune_core::traits::{AudioPlayer, NeteaseClient};
-use netune_player::{NetunePlayer, PlayMode, PlayQueue};
+use netune_player::{NetunePlayer, PlayQueue};
 
 use netune_core::models::Lyrics;
 use netune_core::models::SearchResult;
@@ -46,9 +45,6 @@ struct PendingPlayResult {
     lyrics: Option<Lyrics>,
 }
 
-/// Maximum number of songs to keep in the audio pre-cache.
-const AUDIO_CACHE_MAX: usize = 3;
-
 pub struct App {
     /// Page navigation stack — last element is the active page.
     pub page_stack: Vec<Page>,
@@ -68,11 +64,13 @@ pub struct App {
     queue_panel: Option<QueuePanel>,
     /// Pre-fetched audio data: song_id → audio bytes.
     /// Used to eliminate download delay when switching songs.
-    audio_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
+    audio_cache: crate::audio_cache::DiskAudioCache,
     /// Background task fetching song URL + lyrics + audio bytes.
     pending_play: Option<tokio::task::JoinHandle<PendingPlayResult>>,
     /// Background task for search query.
     pending_search: Option<tokio::task::JoinHandle<netune_core::Result<SearchResult>>>,
+    /// Background task for pre-caching next song.
+    pending_precache: Option<tokio::task::JoinHandle<Option<(u64, Vec<u8>)>>>,
 }
 
 impl App {
@@ -86,9 +84,10 @@ impl App {
             config: Config::default(),
             user: None,
             queue_panel: None,
-            audio_cache: Arc::new(Mutex::new(HashMap::new())),
+            audio_cache: crate::audio_cache::DiskAudioCache::new(),
             pending_play: None,
             pending_search: None,
+            pending_precache: None,
         }
     }
 
@@ -103,6 +102,9 @@ impl App {
         if let Some(handle) = self.pending_play.take() {
             handle.abort();
         }
+        if let Some(handle) = self.pending_precache.take() {
+            handle.abort();
+        }
 
         // Immediately show the player page with loading state.
         self.update_player_page_for(song.clone());
@@ -114,11 +116,7 @@ impl App {
         }
 
         // Try to take pre-cached audio bytes for this song.
-        let cached_bytes = self
-            .audio_cache
-            .lock()
-            .ok()
-            .and_then(|mut cache| cache.remove(&song.id));
+        let cached_bytes = self.audio_cache.get(song.id);
 
         let client = self.api_client.clone();
         let Some(client) = client else {
@@ -234,6 +232,8 @@ impl App {
 
                 // Start playback if we got audio bytes (cache-miss path).
                 if let Some(bytes) = result.audio_bytes {
+                    // Cache to disk for future plays.
+                    self.audio_cache.put(result.song_id, &bytes);
                     if let Some(ref player) = self.player {
                         if let Err(e) = player.play_from_bytes(bytes) {
                             tracing::warn!(error = %e, "Playback from fetched bytes failed");
@@ -263,8 +263,13 @@ impl App {
                 tracing::info!("Now playing");
             }
             Err(e) => {
-                tracing::error!("Background play task panicked: {e}");
-                self.set_player_loading(false);
+                if e.is_cancelled() {
+                    tracing::info!("Background play task cancelled (song changed)");
+                    // Don't clear loading — the new song's task will handle it.
+                } else {
+                    tracing::error!("Background play task panicked: {e}");
+                    self.set_player_loading(false);
+                }
             }
         }
     }
@@ -314,7 +319,7 @@ impl App {
     }
 
     /// Pre-cache the next song in the queue so it plays instantly when reached.
-    fn pre_cache_next(&self) {
+    fn pre_cache_next(&mut self) {
         let Some(ref client) = self.api_client else {
             return;
         };
@@ -326,23 +331,25 @@ impl App {
         let next_song = &songs[idx + 1];
 
         // Already cached — nothing to do.
-        if let Ok(cache) = self.audio_cache.lock() {
-            if cache.contains_key(&next_song.id) {
-                return;
-            }
+        if self.audio_cache.contains(next_song.id) {
+            return;
+        }
+
+        // Abort any in-flight pre-cache task.
+        if let Some(handle) = self.pending_precache.take() {
+            handle.abort();
         }
 
         let song_id = next_song.id;
         let quality = self.config.quality;
         let client = Arc::clone(client);
-        let cache = Arc::clone(&self.audio_cache);
 
-        tokio::spawn(async move {
+        self.pending_precache = Some(tokio::spawn(async move {
             let url = match client.song_url(song_id, quality).await {
                 Ok(u) => u,
                 Err(e) => {
                     tracing::warn!(error = %e, song_id, "Pre-cache: failed to get song URL");
-                    return;
+                    return None;
                 }
             };
             let bytes = match reqwest::get(&url).await {
@@ -350,25 +357,42 @@ impl App {
                     Ok(b) => b.to_vec(),
                     Err(e) => {
                         tracing::warn!(error = %e, song_id, "Pre-cache: failed to read response");
-                        return;
+                        return None;
                     }
                 },
                 Err(e) => {
                     tracing::warn!(error = %e, song_id, "Pre-cache: failed to download");
-                    return;
+                    return None;
                 }
             };
-            if let Ok(mut cache) = cache.lock() {
-                if cache.len() >= AUDIO_CACHE_MAX {
-                    // Evict the oldest entry (first key).
-                    if let Some(oldest) = cache.keys().next().copied() {
-                        cache.remove(&oldest);
-                    }
-                }
-                cache.insert(song_id, bytes);
-                tracing::info!(song_id, "Pre-cache: cached next song");
+            tracing::info!(song_id, "Pre-cache: downloaded next song");
+            Some((song_id, bytes))
+        }));
+    }
+
+    /// Check whether the background pre-cache task has completed; if so, write to disk.
+    async fn poll_pending_precache(&mut self) {
+        let Some(ref handle) = self.pending_precache else {
+            return;
+        };
+        if !handle.is_finished() {
+            return;
+        }
+        let Some(handle) = self.pending_precache.take() else {
+            return;
+        };
+        match handle.await {
+            Ok(Some((song_id, bytes))) => {
+                self.audio_cache.put(song_id, &bytes);
+                tracing::info!(song_id, "Pre-cache: written to disk cache");
             }
-        });
+            Ok(None) => {}
+            Err(e) => {
+                if !e.is_cancelled() {
+                    tracing::warn!("Pre-cache task panicked: {e}");
+                }
+            }
+        }
     }
 
     /// Jump to the next song in the queue.
@@ -396,6 +420,7 @@ impl App {
         for page in &mut self.page_stack {
             if let Page::Player(pp) = page {
                 pp.set_song(song.clone());
+                pp.clear_lyrics();
                 found = true;
                 break;
             }
@@ -580,6 +605,7 @@ impl App {
                 }
                 self.poll_pending_play().await;
                 self.poll_pending_search().await;
+                self.poll_pending_precache().await;
                 continue;
             }
 
@@ -637,6 +663,7 @@ impl App {
             self.apply_action(action).await;
             self.poll_pending_play().await;
             self.poll_pending_search().await;
+            self.poll_pending_precache().await;
 
             if self.should_quit {
                 break;

@@ -70,6 +70,12 @@ impl PlayerPage {
         self.elapsed = Duration::ZERO;
         self.is_playing = true;
         self.current_lyric_idx = 0;
+        self.lyrics = None;
+    }
+
+    pub fn clear_lyrics(&mut self) {
+        self.lyrics = None;
+        self.current_lyric_idx = 0;
     }
 
     pub fn update_from_player(&mut self, position_secs: f64, duration_secs: f64, is_playing: bool) {
