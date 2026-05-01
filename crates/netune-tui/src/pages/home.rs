@@ -269,7 +269,9 @@ impl HomePage {
             .unwrap_or(MenuAction::Quit);
         match action {
             MenuAction::Playlists => {
-                PageAction::Push(super::Page::Playlist(super::PlaylistPage::new()))
+                let mut pp = super::PlaylistPage::new();
+                pp.set_playlists(self.playlists.clone());
+                PageAction::Push(super::Page::Playlist(pp))
             }
             MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
             MenuAction::DailyRecommend => {
