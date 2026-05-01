@@ -190,7 +190,9 @@ impl AudioPlayer for NetunePlayer {
             NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
         })?;
         if let Some(ref ps) = *state {
-            let pos = Duration::from_secs_f64(seconds.max(0.0));
+            let current = ps.player.get_pos().as_secs_f64();
+            let target = (current + seconds).max(0.0).min(ps.duration);
+            let pos = Duration::from_secs_f64(target);
             ps.player
                 .try_seek(pos)
                 .map_err(|e| NetuneError::Player(format!("Seek failed: {e}")))?;

@@ -1,16 +1,16 @@
-//! Player page — full-screen now-playing view.
+//! Player page — full-screen vinyl record player design.
 //!
-//! Compact, terminal-native layout inspired by ncmpcpp / spotify-tui:
-//! - **Info**: status icon + title + artist/album (no border)
-//! - **Progress bar**: block characters with elapsed/duration
-//! - **Lyrics**: scrollable, current line highlighted (no border)
-//! - **Controls**: play/pause/next/prev + volume + play mode (single line)
+//! A decorative vinyl record sits centered in the page with:
+//! - Song title + artist inside the record grooves
+//! - Volume represented as groove density
+//! - Tonearm tracks progress across the record
+//! - Lyrics scroll below the record
 
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
@@ -115,37 +115,156 @@ impl PlayerPage {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // info (title + artist)
+                Constraint::Length(1), // top spacer
+                Constraint::Length(16), // vinyl record
                 Constraint::Length(1), // separator
-                Constraint::Length(1), // progress bar
-                Constraint::Length(1), // separator
-                Constraint::Min(3),    // lyrics (fills remaining space)
-                Constraint::Length(1), // separator
-                Constraint::Length(1), // controls line
+                Constraint::Min(3),    // lyrics
             ])
             .split(area);
 
-        self.render_info(f, chunks[0]);
-        Self::render_separator(f, chunks[1], Theme::MUTED);
+        self.render_record(f, chunks[1]);
 
-        if self.loading {
-            Self::render_loading(f, chunks[2], chunks[4]);
-        } else {
-            self.render_progress_bar(f, chunks[2]);
-        }
-        Self::render_separator(f, chunks[3], Theme::MUTED);
+        // separator line
+        let sep = "─".repeat(area.width as usize);
+        f.render_widget(
+            Paragraph::new(Span::styled(sep, Style::default().fg(Theme::ACCENT_DIM))),
+            chunks[2],
+        );
 
-        if !self.loading {
-            self.render_lyrics(f, chunks[4]);
-        }
-
-        Self::render_separator(f, chunks[5], Theme::MUTED);
-        self.render_controls_line(f, chunks[6]);
+        self.render_lyrics(f, chunks[3]);
     }
 
-    /// Song title (bold) + artist · album (dimmed), no border.
-    fn render_info(&self, f: &mut Frame, area: Rect) {
-        let (title, artists, album) = match &self.song {
+    /// Build and render the vinyl record centered in the area.
+    fn render_record(&self, f: &mut Frame, area: Rect) {
+        let (title, artists, _album) = self.song_info();
+        let time_str = format!(
+            "{} / {}",
+            format_duration(self.elapsed),
+            format_duration(self.duration)
+        );
+
+        // Tonearm position: maps progress (0.0-1.0) to content rows 3-13
+        let arm_row = ((self.progress * 10.0) as usize).clamp(0, 10) + 3;
+
+        // Volume grooves: number of groove lines varies with volume
+        let num_grooves = 1 + (self.volume as usize * 4) / 100; // 1-5 groove lines
+        let groove_inner_w = 23; // width inside the record for grooves
+        let filled = (self.volume as usize * groove_inner_w) / 100;
+        let groove_line = format!("{}{}", "─ ".repeat(filled / 2), "─");
+
+        // Build record lines (16 total)
+        let mut lines: Vec<Line> = Vec::with_capacity(16);
+
+        // Row 0: outer top cap
+        lines.push(Line::from(Span::styled(
+            format!("    ╭{}╮", "─".repeat(33)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+        // Row 1: second rim
+        lines.push(Line::from(Span::styled(
+            format!("  ╭─{}│─╮", "─".repeat(30)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+        // Row 2: third rim
+        lines.push(Line::from(Span::styled(
+            format!("╭─│─{}│─│╮", "─".repeat(28)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+
+        // Content rows (rows 3-13, 11 rows)
+        let mut content: Vec<(String, bool)> = Vec::with_capacity(11);
+        // Row 3: blank
+        content.push((String::new(), false));
+        // Row 4: title
+        if self.loading {
+            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let frame = SPINNER[self.loading_tick % SPINNER.len()];
+            content.push((format!("{frame} Loading..."), true));
+        } else {
+            content.push((title, true));
+        }
+        // Row 5: artist
+        content.push((artists, true));
+        // Row 6: blank
+        content.push((String::new(), false));
+        // Rows 7-(6+num_grooves): volume grooves
+        for i in 0..num_grooves.min(5) {
+            let indent = if i % 2 == 0 { "  " } else { "   " };
+            content.push((format!("{indent}{groove_line}"), true));
+        }
+        // Fill remaining groove slots with blank to keep consistent row count
+        for _ in num_grooves..5 {
+            content.push((String::new(), false));
+        }
+        // Row 12: blank (after grooves)
+        content.push((String::new(), false));
+        // Row 13: time
+        content.push((time_str, true));
+
+        // Render content rows with side borders and optional tonearm
+        for (i, (text, _)) in content.iter().enumerate() {
+            let row = i + 3; // absolute row index
+            let arm = if row == arm_row { "──╯" } else { "   " };
+            let arm_style = if row == arm_row {
+                Style::default().fg(Theme::MUTED)
+            } else {
+                Style::default()
+            };
+
+            let title_style = if row == 4 {
+                Style::default()
+                    .fg(Theme::FG)
+                    .add_modifier(Modifier::BOLD)
+            } else if row == 5 {
+                Style::default().fg(Theme::ACCENT)
+            } else if row == 13 {
+                Style::default().fg(Theme::FG_DIM)
+            } else {
+                Style::default().fg(Theme::MUTED)
+            };
+
+            let padded = format!("{:<28}", text);
+            lines.push(Line::from(vec![
+                Span::styled("│  ", Style::default().fg(Theme::ACCENT_DIM)),
+                Span::styled(padded, title_style),
+                Span::styled("│", Style::default().fg(Theme::ACCENT_DIM)),
+                Span::styled(arm, arm_style),
+            ]));
+        }
+
+        // Row 14: third rim bottom
+        lines.push(Line::from(Span::styled(
+            format!("╰─│─{}│─│╯", "─".repeat(28)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+        // Row 15: second rim bottom
+        lines.push(Line::from(Span::styled(
+            format!("  ╰─{}│─╯", "─".repeat(30)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+        // Row 16: outer bottom cap
+        lines.push(Line::from(Span::styled(
+            format!("    ╰{}╯", "─".repeat(33)),
+            Style::default().fg(Theme::ACCENT_DIM),
+        )));
+
+        // Center vertically and render line by line
+        let total = lines.len() as u16;
+        let start_y = area.y + area.height.saturating_sub(total) / 2;
+        for (i, line) in lines.into_iter().enumerate() {
+            let y = start_y + i as u16;
+            if y >= area.y && y < area.y + area.height {
+                f.render_widget(
+                    Paragraph::new(line),
+                    Rect::new(area.x, y, area.width, 1),
+                );
+            }
+        }
+    }
+
+    /// Extract (title, artists, album) from the current song.
+    fn song_info(&self) -> (String, String, String) {
+        match &self.song {
             Some(song) => {
                 let artists = song
                     .artists
@@ -155,93 +274,12 @@ impl PlayerPage {
                     .join(", ");
                 (song.name.clone(), artists, song.album.name.clone())
             }
-            None => ("No song playing".to_string(), String::new(), String::new()),
-        };
-
-        let status_icon = if self.is_playing { "▶" } else { "⏸" };
-
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!(" {status_icon}  "),
-                    Style::default()
-                        .fg(if self.is_playing {
-                            Theme::PLAYING
-                        } else {
-                            Theme::MUTED
-                        })
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    title,
-                    Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw("     "),
-                Span::styled(artists, Style::default().fg(Theme::ACCENT)),
-                if album.is_empty() {
-                    Span::raw("")
-                } else {
-                    Span::styled(format!(" · {album}"), Style::default().fg(Theme::MUTED))
-                },
-            ]),
-        ];
-
-        f.render_widget(Paragraph::new(lines), area);
-    }
-
-    /// Block-character progress bar: `elapsed ▓▓▓▓▓▓░░░░ duration`
-    fn render_progress_bar(&self, f: &mut Frame, area: Rect) {
-        let elapsed_str = format_duration(self.elapsed);
-        let duration_str = format_duration(self.duration);
-        let overhead = elapsed_str.len() as u16 + duration_str.len() as u16 + 4; // spaces around bar
-        let bar_width = area.width.saturating_sub(overhead) as usize;
-        let filled = (self.progress * bar_width as f64) as usize;
-        let empty = bar_width.saturating_sub(filled);
-
-        let line = Line::from(vec![
-            Span::styled(
-                format!(" {elapsed_str} "),
-                Style::default().fg(Theme::FG_DIM),
+            None => (
+                "No song playing".to_string(),
+                String::new(),
+                String::new(),
             ),
-            Span::styled("▓".repeat(filled), Style::default().fg(Theme::ACCENT)),
-            Span::styled("░".repeat(empty), Style::default().fg(Theme::MUTED)),
-            Span::styled(
-                format!(" {duration_str} "),
-                Style::default().fg(Theme::FG_DIM),
-            ),
-        ]);
-
-        f.render_widget(Paragraph::new(line), area);
-    }
-
-    /// Thin horizontal separator: `─────────`
-    fn render_separator(f: &mut Frame, area: Rect, color: Color) {
-        let line = "─".repeat(area.width as usize);
-        f.render_widget(
-            Paragraph::new(Span::styled(line, Style::default().fg(color))),
-            area,
-        );
-    }
-
-    /// Loading state: spinner in progress bar area + message in lyrics area.
-    fn render_loading(f: &mut Frame, progress_area: Rect, lyrics_area: Rect) {
-        // Empty progress bar area
-        f.render_widget(Paragraph::new(""), progress_area);
-
-        const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let frame = SPINNER[0]; // static render; tick updates via re-render
-        let loading_text = Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {frame} "), Style::default().fg(Theme::ACCENT)),
-            Span::styled(
-                "Loading audio...",
-                Style::default()
-                    .fg(Theme::MUTED)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
-        f.render_widget(loading_text, lyrics_area);
+        }
     }
 
     /// Lyrics with current line highlighted, no border.
@@ -291,52 +329,6 @@ impl PlayerPage {
         };
 
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
-    }
-
-    /// Single-line controls: ◄  ▶  ►   🔊 ▓▓▓▓▓▓░░ 80%   🔁 顺序
-    fn render_controls_line(&self, f: &mut Frame, area: Rect) {
-        let (mode_icon, mode_label, mode_color) = match self.play_mode {
-            PlayMode::Sequential => ("▶▷", "顺序", Theme::MUTED),
-            PlayMode::LoopAll => ("🔁", "全部循环", Theme::ACCENT),
-            PlayMode::LoopOne => ("🔂", "单曲循环", Theme::WARNING),
-            PlayMode::Shuffle => ("🔀", "随机", Theme::SUCCESS),
-        };
-
-        let mut spans: Vec<Span<'static>> = vec![];
-
-        // Play controls — prev / play-pause / next
-        spans.push(Span::styled("  ◄  ", Style::default().fg(Theme::FG_DIM)));
-        spans.push(Span::styled(
-            if self.is_playing { "▶" } else { "⏸" },
-            Theme::accent_bold(),
-        ));
-        spans.push(Span::styled("  ►  ", Style::default().fg(Theme::FG_DIM)));
-
-        // Volume (compact, inline)
-        spans.extend(self.render_volume_inline());
-
-        // Play mode
-        spans.push(Span::styled(
-            format!("  {mode_icon} {mode_label}"),
-            Style::default().fg(mode_color),
-        ));
-
-        f.render_widget(Paragraph::new(Line::from(spans)), area);
-    }
-
-    /// Compact inline volume bar: `🔊 ▓▓▓▓▓▓░░ 80%`
-    fn render_volume_inline(&self) -> Vec<Span<'static>> {
-        let vol = self.volume as usize;
-        let bar_width = 8; // fixed short width — distinct from progress bar
-        let filled = (vol * bar_width) / 100;
-        let empty = bar_width.saturating_sub(filled);
-
-        vec![
-            Span::styled(" 🔊 ", Style::default().fg(Theme::MUTED)),
-            Span::styled("▓".repeat(filled), Style::default().fg(Theme::ACCENT)),
-            Span::styled("░".repeat(empty), Style::default().fg(Theme::MUTED)),
-            Span::styled(format!(" {vol}% "), Style::default().fg(Theme::FG_DIM)),
-        ]
     }
 
     // ── Events ──────────────────────────────────────────────────────────────
@@ -407,7 +399,7 @@ impl PlayerPage {
 
     // ── Chrome contract ─────────────────────────────────────────────────────
 
-    pub fn mode(&self) -> (String, Color) {
+    pub fn mode(&self) -> (String, ratatui::style::Color) {
         if self.is_playing {
             ("PLAYING".into(), Theme::MODE_PLAYING)
         } else {

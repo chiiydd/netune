@@ -27,6 +27,7 @@ struct MenuItem {
 
 #[derive(Clone, Copy)]
 enum MenuAction {
+    NowPlaying,
     Playlists,
     Search,
     DailyRecommend,
@@ -72,6 +73,12 @@ impl HomePage {
     /// Build the menu items based on current login state.
     fn menu_items(&self) -> Vec<MenuItem> {
         let mut items = Vec::new();
+
+        items.push(MenuItem {
+            label: "Now Playing",
+            desc: "Go to the player page",
+            action: MenuAction::NowPlaying,
+        });
 
         if self.user.is_some() {
             items.push(MenuItem {
@@ -268,6 +275,9 @@ impl HomePage {
             .map(|item| item.action)
             .unwrap_or(MenuAction::Quit);
         match action {
+            MenuAction::NowPlaying => {
+                PageAction::Push(super::Page::Player(super::PlayerPage::new()))
+            }
             MenuAction::Playlists => {
                 let mut pp = super::PlaylistPage::new();
                 pp.set_playlists(self.playlists.clone());
