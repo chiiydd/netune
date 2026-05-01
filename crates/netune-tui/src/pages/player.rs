@@ -278,7 +278,7 @@ impl PlayerPage {
             let y = start_y + i as u16;
             if y >= area.y && y < area.y + area.height {
                 f.render_widget(
-                    Paragraph::new(line),
+                    Paragraph::new(line).alignment(Alignment::Center),
                     Rect::new(area.x, y, area.width, 1),
                 );
             }

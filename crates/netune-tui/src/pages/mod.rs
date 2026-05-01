@@ -65,6 +65,8 @@ pub enum PageAction {
     JumpToQueueItem(usize),
     /// Cycle play mode (Sequential → LoopAll → LoopOne → Shuffle).
     CyclePlayMode,
+    /// Auto-advance to the next song when the current one finishes.
+    PlayNext,
 }
 
 /// Settings page focus fields.

@@ -460,6 +460,20 @@ impl App {
 
     fn tick(&mut self) -> PageAction {
         self.sync_player_state();
+
+        // Auto-advance: when the current song finishes, play the next one.
+        if let Some(ref player) = self.player {
+            let pos = player.position();
+            let dur = player.duration();
+            let playing = player.is_playing();
+            // Song finished: position >= duration (with small tolerance), and not playing
+            if dur > 0.0 && pos >= dur - 0.5 && !playing {
+                tracing::info!(pos, dur, "Song finished, auto-advancing");
+                // Return PlayNext action — will be handled by apply_action
+                return PageAction::PlayNext;
+            }
+        }
+
         if let Some(page) = self.page_stack.last_mut() {
             page.tick()
         } else {
@@ -808,6 +822,11 @@ impl App {
             // ── Play queue ──────────────────────────────────────────────
             PageAction::PlayQueue(songs) => {
                 self.play_queue.load(songs);
+                self.do_play_next().await;
+            }
+
+            // ── Auto-advance to next song ───────────────────────────────
+            PageAction::PlayNext => {
                 self.do_play_next().await;
             }
 
