@@ -29,6 +29,8 @@ pub struct PlayerPage {
     duration: Duration,
     is_playing: bool,
     loading: bool,
+    /// Tick counter for the loading spinner animation.
+    loading_tick: usize,
     lyrics: Option<Lyrics>,
     current_lyric_idx: usize,
     volume: u16,
@@ -50,6 +52,7 @@ impl PlayerPage {
             duration: Duration::ZERO,
             is_playing: false,
             loading: false,
+            loading_tick: 0,
             lyrics: None,
             current_lyric_idx: 0,
             volume: 80,
@@ -120,11 +123,18 @@ impl PlayerPage {
         self.render_info(f, chunks[0]);
 
         if self.loading {
+            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let frame = SPINNER[self.loading_tick % SPINNER.len()];
             let loading_text = Paragraph::new(Line::from(vec![
-                Span::styled("  ⏳ ", Style::default().fg(Theme::ACCENT)),
+                Span::styled(
+                    format!("  {frame} "),
+                    Style::default().fg(Theme::ACCENT),
+                ),
                 Span::styled(
                     "Loading audio...",
-                    Style::default().fg(Theme::MUTED).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(Theme::MUTED)
+                        .add_modifier(Modifier::ITALIC),
                 ),
             ]))
             .block(
@@ -371,6 +381,10 @@ impl PlayerPage {
     // ── Tick ────────────────────────────────────────────────────────────────
 
     pub fn tick(&mut self) {
+        // Advance loading spinner animation.
+        if self.loading {
+            self.loading_tick = self.loading_tick.wrapping_add(1);
+        }
         if !self.is_playing {
             return;
         }

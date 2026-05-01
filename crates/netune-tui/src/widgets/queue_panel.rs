@@ -172,7 +172,7 @@ impl QueuePanel {
         }
 
         match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => QueuePanelResult::Close,
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Tab => QueuePanelResult::Close,
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.total > 0 {
                     let i = self.list_state.selected().unwrap_or(0);

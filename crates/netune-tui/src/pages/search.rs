@@ -17,6 +17,8 @@ use crate::chrome::KeyHint;
 use crate::pages::PageAction;
 use crate::theme::Theme;
 
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchMode {
     Input,
@@ -28,6 +30,10 @@ pub struct SearchPage {
     query: String,
     results: Vec<Song>,
     list_state: ListState,
+    /// Whether a search request is currently in-flight.
+    loading: bool,
+    /// Spinner frame index for loading animation.
+    spinner_idx: usize,
 }
 
 impl Default for SearchPage {
@@ -43,6 +49,8 @@ impl SearchPage {
             query: String::new(),
             results: Vec::new(),
             list_state: ListState::default(),
+            loading: false,
+            spinner_idx: 0,
         }
     }
 
@@ -60,6 +68,22 @@ impl SearchPage {
             Some(0)
         });
         self.mode = SearchMode::Normal;
+        self.loading = false;
+    }
+
+    /// Set the loading spinner state.
+    pub fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+        if loading {
+            self.spinner_idx = 0;
+        }
+    }
+
+    /// Advance the spinner animation. Called from `Page::tick()`.
+    pub fn tick(&mut self) {
+        if self.loading {
+            self.spinner_idx = (self.spinner_idx + 1) % SPINNER_FRAMES.len();
+        }
     }
 
     /// Get the currently selected song.
@@ -113,6 +137,28 @@ impl SearchPage {
     }
 
     fn render_results(&mut self, f: &mut Frame, area: Rect) {
+        if self.loading {
+            let frame = SPINNER_FRAMES[self.spinner_idx];
+            let msg = format!("{frame} Searching…");
+            let items = vec![ListItem::new(Line::from(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(Theme::ACCENT),
+            )))];
+            let list = List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .title(Span::styled(
+                        " Results ",
+                        Style::default()
+                            .fg(Theme::ACCENT)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+            );
+            f.render_widget(list, area);
+            return;
+        }
         let items: Vec<ListItem> = if self.results.is_empty() {
             let msg = if self.query.is_empty() {
                 "Type a query and press Enter"

@@ -21,10 +21,21 @@ use netune_core::models::{Song, UserProfile};
 use netune_core::traits::{AudioPlayer, NeteaseClient};
 use netune_player::{NetunePlayer, PlayMode, PlayQueue};
 
+use netune_core::models::Lyrics;
+use netune_core::models::SearchResult;
+
 use crate::chrome;
 use crate::pages::Page;
 use crate::pages::PageAction;
 use crate::widgets::queue_panel::{QueuePanel, QueuePanelResult};
+
+/// Result of a background song-loading task.
+struct PendingPlayResult {
+    _song: Song,
+    /// Audio bytes — `None` when we already played from cache (cache hit).
+    audio_bytes: Option<Vec<u8>>,
+    lyrics: Option<Lyrics>,
+}
 
 /// Maximum number of songs to keep in the audio pre-cache.
 const AUDIO_CACHE_MAX: usize = 3;
@@ -49,6 +60,10 @@ pub struct App {
     /// Pre-fetched audio data: song_id → audio bytes.
     /// Used to eliminate download delay when switching songs.
     audio_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
+    /// Background task fetching song URL + lyrics + audio bytes.
+    pending_play: Option<tokio::task::JoinHandle<PendingPlayResult>>,
+    /// Background task for search query.
+    pending_search: Option<tokio::task::JoinHandle<netune_core::Result<SearchResult>>>,
 }
 
 impl App {
@@ -63,6 +78,8 @@ impl App {
             user: None,
             queue_panel: None,
             audio_cache: Arc::new(Mutex::new(HashMap::new())),
+            pending_play: None,
+            pending_search: None,
         }
     }
 
@@ -70,10 +87,13 @@ impl App {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    /// Play a song: check cache or fetch its streaming URL, start playback,
-    /// update pages, and trigger pre-cache for the next song.
+    /// Play a song: check cache or spawn a background task for URL + lyrics +
+    /// audio download so the UI never blocks on network I/O.
     async fn do_play_song(&mut self, song: Song) {
-        let quality = self.config.quality;
+        // Abort any in-flight background task (user picked a new song).
+        if let Some(handle) = self.pending_play.take() {
+            handle.abort();
+        }
 
         // Immediately show the player page with loading state.
         self.update_player_page_for(song.clone());
@@ -91,111 +111,182 @@ impl App {
             .ok()
             .and_then(|mut cache| cache.remove(&song.id));
 
-        let Some(ref client) = self.api_client else {
+        let client = self.api_client.clone();
+        let Some(client) = client else {
             tracing::warn!("Cannot play song — no API client");
+            self.set_player_loading(false);
             return;
         };
 
         if let Some(bytes) = cached_bytes {
-            // ── Cache hit: play instantly from bytes ──────────────────
+            // ── Cache hit: play instantly, fetch lyrics in background ──
             tracing::info!(song_id = song.id, "Playing from audio cache");
             if let Some(ref player) = self.player {
                 if let Err(e) = player.play_from_bytes(bytes) {
                     tracing::warn!(error = %e, "Playback from cache failed");
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            break;
-                        }
-                    }
+                    self.set_player_loading(false);
                     return;
                 }
                 player.set_volume(self.config.volume);
             }
+            // Playback started — clear loading indicator.
+            self.set_player_loading(false);
 
-            // Only lyrics need fetching — URL is not required.
-            match client.lyrics(song.id).await {
-                Ok(lyrics) => {
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            pp.set_lyrics(lyrics);
-                            break;
-                        }
-                    }
+            // Fetch lyrics in background (non-blocking).
+            let song_id = song.id;
+            self.pending_play = Some(tokio::spawn(async move {
+                let lyrics = client
+                    .lyrics(song_id)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(error = %e, "Failed to fetch lyrics");
+                        e
+                    })
+                    .ok();
+                PendingPlayResult {
+                    _song: song,
+                    audio_bytes: None, // already played from cache
+                    lyrics,
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to fetch lyrics");
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            break;
-                        }
-                    }
-                }
-            }
+            }));
         } else {
-            // ── Cache miss: fetch URL + lyrics concurrently ──────────
-            let url_fut = client.song_url(song.id, quality);
-            let lyrics_fut = client.lyrics(song.id);
-            let (url_result, lyrics_result) = tokio::join!(url_fut, lyrics_fut);
+            // ── Cache miss: spawn background task for URL + lyrics + download
+            let quality = self.config.quality;
+            self.pending_play = Some(tokio::spawn(async move {
+                // Fetch song URL and lyrics concurrently.
+                let (url_result, lyrics_result) =
+                    tokio::join!(client.song_url(song.id, quality), client.lyrics(song.id));
 
-            let url = match url_result {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            break;
+                let lyrics = lyrics_result
+                    .map_err(|e| tracing::warn!(error = %e, "Failed to fetch lyrics"))
+                    .ok();
+
+                let audio_bytes = match url_result {
+                    Ok(url) => {
+                        // Download full audio in background.
+                        match reqwest::get(&url).await {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(b) => Some(b.to_vec()),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to read audio body");
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to download audio");
+                                None
+                            }
                         }
                     }
-                    return;
-                }
-            };
-
-            // Start playback (downloads the full audio then plays).
-            if let Some(ref player) = self.player {
-                if let Err(e) = player.play(&url).await {
-                    tracing::warn!(error = %e, "Playback failed");
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            break;
-                        }
+                    Err(e) => {
+                        tracing::warn!(error = %e, song_id = song.id, "Failed to get song URL");
+                        None
                     }
-                    return;
-                }
-                player.set_volume(self.config.volume);
-            }
+                };
 
-            // Clear loading state and set lyrics.
-            match lyrics_result {
-                Ok(lyrics) => {
+                PendingPlayResult {
+                    _song: song,
+                    audio_bytes,
+                    lyrics,
+                }
+            }));
+        }
+    }
+
+    /// Check whether the background play task has completed; if so, apply its
+    /// results (start playback, set lyrics, clear loading).
+    async fn poll_pending_play(&mut self) {
+        let Some(ref handle) = self.pending_play else {
+            return;
+        };
+        if !handle.is_finished() {
+            return;
+        }
+        // Take the handle out so we can await it.
+        let Some(handle) = self.pending_play.take() else {
+            return;
+        };
+        match handle.await {
+            Ok(result) => {
+                // Start playback if we got audio bytes (cache-miss path).
+                if let Some(bytes) = result.audio_bytes {
+                    if let Some(ref player) = self.player {
+                        if let Err(e) = player.play_from_bytes(bytes) {
+                            tracing::warn!(error = %e, "Playback from fetched bytes failed");
+                            self.set_player_loading(false);
+                            return;
+                        }
+                        player.set_volume(self.config.volume);
+                    }
+                }
+
+                // Apply lyrics.
+                if let Some(lyrics) = result.lyrics {
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
-                            pp.set_loading(false);
                             pp.set_lyrics(lyrics);
                             break;
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to fetch lyrics");
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.set_loading(false);
-                            break;
-                        }
-                    }
+
+                // Clear loading state.
+                self.set_player_loading(false);
+
+                // Trigger background pre-cache for the next song.
+                self.pre_cache_next();
+
+                tracing::info!("Now playing");
+            }
+            Err(e) => {
+                tracing::error!("Background play task panicked: {e}");
+                self.set_player_loading(false);
+            }
+        }
+    }
+
+    /// Set or clear the loading spinner on the current PlayerPage.
+    fn set_player_loading(&mut self, loading: bool) {
+        for page in &mut self.page_stack {
+            if let Page::Player(pp) = page {
+                pp.set_loading(loading);
+                break;
+            }
+        }
+    }
+
+    /// Check whether the background search task has completed; if so, apply
+    /// results and clear loading state.
+    async fn poll_pending_search(&mut self) {
+        let Some(ref handle) = self.pending_search else {
+            return;
+        };
+        if !handle.is_finished() {
+            return;
+        }
+        let Some(handle) = self.pending_search.take() else {
+            return;
+        };
+        match handle.await {
+            Ok(Ok(result)) => {
+                tracing::info!(count = result.songs.len(), total = result.total, "Search OK");
+                if let Some(Page::Search(sp)) = self.page_stack.last_mut() {
+                    sp.set_results(result.songs);
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "Search failed");
+                if let Some(Page::Search(sp)) = self.page_stack.last_mut() {
+                    sp.set_results(Vec::new());
+                }
+            }
+            Err(e) => {
+                tracing::error!("Background search task panicked: {e}");
+                if let Some(Page::Search(sp)) = self.page_stack.last_mut() {
+                    sp.set_results(Vec::new());
                 }
             }
         }
-
-        // Trigger background pre-cache for the next song in the queue.
-        self.pre_cache_next();
-
-        tracing::info!("Now playing");
     }
 
     /// Pre-cache the next song in the queue so it plays instantly when reached.
@@ -438,6 +529,8 @@ impl App {
                 if !matches!(tick_action, PageAction::None) {
                     self.apply_action(tick_action).await;
                 }
+                self.poll_pending_play().await;
+                self.poll_pending_search().await;
                 continue;
             }
 
@@ -493,6 +586,8 @@ impl App {
             };
 
             self.apply_action(action).await;
+            self.poll_pending_play().await;
+            self.poll_pending_search().await;
 
             if self.should_quit {
                 break;
@@ -653,16 +748,23 @@ impl App {
                     sp.set_results(Vec::new());
                     return;
                 };
-                match client.search_songs(&keyword, 0, 30).await {
-                    Ok(result) => {
-                        tracing::info!(count = result.songs.len(), total = result.total, "Search OK");
-                        sp.set_results(result.songs);
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Search failed");
-                        sp.set_results(Vec::new());
-                    }
+                // Abort any in-flight search.
+                if let Some(handle) = self.pending_search.take() {
+                    handle.abort();
                 }
+                sp.set_loading(true);
+                let client = Arc::clone(client);
+                self.pending_search = Some(tokio::spawn(async move {
+                    client.search_songs(&keyword, 0, 30).await
+                }));
+            }
+
+            // ── Search results ready ─────────────────────────────────────
+            PageAction::SearchReady(songs) => {
+                let Some(Page::Search(sp)) = self.page_stack.last_mut() else {
+                    return;
+                };
+                sp.set_results(songs);
             }
 
             // ── Play song ───────────────────────────────────────────────

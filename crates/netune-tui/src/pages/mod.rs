@@ -41,6 +41,8 @@ pub enum PageAction {
     BrowserImportConfirm(String),
     /// Search page submits a query.
     Search(String),
+    /// Background search task completed with results.
+    SearchReady(Vec<Song>),
     /// Play a specific song (from search results or playlist tracks).
     PlaySong(Song),
     /// Load playlist tracks and set them as the play queue.
@@ -113,6 +115,7 @@ impl Page {
         match self {
             Page::Login(p) => p.tick(),
             Page::Player(p) => { p.tick(); PageAction::None }
+            Page::Search(p) => { p.tick(); PageAction::None }
             _ => PageAction::None,
         }
     }
