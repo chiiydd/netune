@@ -234,9 +234,9 @@ impl PlayerPage {
             // ── Playback controls ──
             // Line 8:  ◄◄   ▶/❚❚   ►►   🔀
             let controls = if self.is_playing {
-                format!("◄◄   ▶❚❚   ►►   {}", self.play_mode_symbol())
+                format!("⏮  ▶❚❚  ⏭  {}", self.play_mode_symbol())
             } else {
-                format!("◄◄    ▶    ►►   {}", self.play_mode_symbol())
+                format!("⏮   ▶   ⏭  {}", self.play_mode_symbol())
             };
             lines.push(self.make_boxed_line(&controls, Style::default().fg(Theme::MUTED), bc, box_w));
 
@@ -308,10 +308,10 @@ impl PlayerPage {
 
     fn play_mode_symbol(&self) -> &'static str {
         match self.play_mode {
-            PlayMode::Sequential => "⇄",
-            PlayMode::LoopAll => "🔁",
-            PlayMode::LoopOne => "🔂",
-            PlayMode::Shuffle => "🔀",
+            PlayMode::Sequential => "→",
+            PlayMode::LoopAll => "⟳",
+            PlayMode::LoopOne => "⟳¹",
+            PlayMode::Shuffle => "⤮",
         }
     }
 
