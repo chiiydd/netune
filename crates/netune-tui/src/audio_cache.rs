@@ -103,6 +103,34 @@ impl DiskAudioCache {
         self.evict_if_needed();
     }
 
+    /// Store lyrics JSON for a song alongside the audio cache.
+    pub async fn put_lyrics(&mut self, song_id: u64, lyrics_json: &[u8]) {
+        let path = self.dir.join(format!("{song_id}.lrc"));
+        if let Err(e) = tokio::fs::write(&path, lyrics_json).await {
+            tracing::warn!(error = %e, song_id, "Failed to write lyrics cache");
+        }
+    }
+
+    /// Get cached lyrics JSON for a song.
+    pub async fn get_lyrics(&mut self, song_id: u64) -> Option<Vec<u8>> {
+        let path = self.dir.join(format!("{song_id}.lrc"));
+        tokio::fs::read(&path).await.ok()
+    }
+
+    /// Store cover image bytes for a song alongside the audio cache.
+    pub async fn put_cover(&mut self, song_id: u64, cover_bytes: &[u8]) {
+        let path = self.dir.join(format!("{song_id}.cover"));
+        if let Err(e) = tokio::fs::write(&path, cover_bytes).await {
+            tracing::warn!(error = %e, song_id, "Failed to write cover cache");
+        }
+    }
+
+    /// Get cached cover image bytes for a song.
+    pub async fn get_cover(&mut self, song_id: u64) -> Option<Vec<u8>> {
+        let path = self.dir.join(format!("{song_id}.cover"));
+        tokio::fs::read(&path).await.ok()
+    }
+
     /// Check if a song is cached.
     pub fn contains(&self, song_id: u64) -> bool {
         self.index.contains_key(&song_id)

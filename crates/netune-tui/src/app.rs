@@ -47,6 +47,14 @@ struct PendingPlayResult {
     cover_bytes: Option<Vec<u8>>,
 }
 
+/// Result of a background pre-cache task (audio + lyrics + cover).
+struct PreCacheResult {
+    song_id: u64,
+    audio_bytes: Vec<u8>,
+    lyrics: Option<Lyrics>,
+    cover_bytes: Option<Vec<u8>>,
+}
+
 pub struct App {
     /// Page navigation stack — last element is the active page.
     pub page_stack: Vec<Page>,
@@ -71,8 +79,8 @@ pub struct App {
     pending_play: Option<tokio::task::JoinHandle<PendingPlayResult>>,
     /// Background task for search query.
     pending_search: Option<tokio::task::JoinHandle<netune_core::Result<SearchResult>>>,
-    /// Background task for pre-caching next song.
-    pending_precache: Option<tokio::task::JoinHandle<Option<(u64, Vec<u8>)>>>,
+    /// Background task for pre-caching next song (audio + lyrics + cover).
+    pending_precache: Option<tokio::task::JoinHandle<Option<PreCacheResult>>>,
 }
 
 impl App {
@@ -128,7 +136,7 @@ impl App {
         };
 
         if let Some(bytes) = cached_bytes {
-            // ── Cache hit: play instantly, fetch lyrics in background ──
+            // ── Cache hit: play instantly, check for cached lyrics/cover ──
             tracing::info!(song_id = song.id, "Playing from audio cache");
             if let Some(ref player) = self.player {
                 if let Err(e) = player.play_from_bytes(bytes) {
@@ -141,11 +149,56 @@ impl App {
             // Playback started — clear loading indicator.
             self.set_player_loading(false);
 
-            // Fetch lyrics in background (non-blocking).
+            // Try to load cached lyrics.
+            let cached_lyrics = self.audio_cache.get_lyrics(song.id).await;
+            if let Some(ref lyrics_bytes) = cached_lyrics {
+                match serde_json::from_slice::<Lyrics>(lyrics_bytes) {
+                    Ok(lyrics) => {
+                        tracing::info!(song_id = song.id, "Applying cached lyrics");
+                        for page in &mut self.page_stack {
+                            if let Page::Player(pp) = page {
+                                pp.set_lyrics(lyrics);
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to deserialize cached lyrics");
+                    }
+                }
+            }
+
+            // Try to load cached cover.
+            let cached_cover = self.audio_cache.get_cover(song.id).await;
+            if let Some(ref cover_bytes) = cached_cover {
+                tracing::info!(song_id = song.id, size = cover_bytes.len(), "Applying cached cover");
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_cover_bytes(cover_bytes);
+                        break;
+                    }
+                }
+            }
+
+            // If both lyrics and cover were cached, no background task needed.
+            if cached_lyrics.is_some() && cached_cover.is_some() {
+                self.pre_cache_next();
+                return;
+            }
+
+            // Fetch any missing lyrics/cover in background (non-blocking).
             let song_id = song.id;
-            let cover_url = song.album.cover_url.clone();
+            let need_lyrics = cached_lyrics.is_none();
+            let need_cover = cached_cover.is_none();
+            let cover_url = if need_cover { song.album.cover_url.clone() } else { None };
             self.pending_play = Some(tokio::spawn(async move {
-                let lyrics_fut = client.lyrics(song_id);
+                let lyrics_fut = async {
+                    if need_lyrics {
+                        client.lyrics(song_id).await.ok()
+                    } else {
+                        None
+                    }
+                };
                 let cover_fut = async {
                     if let Some(url) = cover_url {
                         tracing::debug!(url = %url, "Downloading album cover");
@@ -164,17 +217,10 @@ impl App {
                             }
                         }
                     } else {
-                        tracing::debug!("No cover URL available");
                         None
                     }
                 };
-                let (lyrics_result, cover_bytes) = tokio::join!(lyrics_fut, cover_fut);
-                let lyrics = lyrics_result
-                    .map_err(|e| {
-                        tracing::warn!(error = %e, "Failed to fetch lyrics");
-                        e
-                    })
-                    .ok();
+                let (lyrics, cover_bytes) = tokio::join!(lyrics_fut, cover_fut);
                 PendingPlayResult {
                     song_id,
                     _song: song,
@@ -296,8 +342,12 @@ impl App {
                     }
                 }
 
-                // Apply lyrics.
-                if let Some(lyrics) = result.lyrics {
+                // Apply lyrics (and cache them).
+                if let Some(ref lyrics) = result.lyrics {
+                    if let Ok(json) = serde_json::to_vec(lyrics) {
+                        self.audio_cache.put_lyrics(result.song_id, &json).await;
+                    }
+                    let lyrics = lyrics.clone();
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
                             pp.set_lyrics(lyrics);
@@ -306,9 +356,11 @@ impl App {
                     }
                 }
 
-                // Apply cover art.
-                if let Some(cover_bytes) = result.cover_bytes {
+                // Apply cover art (and cache it).
+                if let Some(ref cover_bytes) = result.cover_bytes {
                     tracing::debug!(size = cover_bytes.len(), "Applying cover art to player");
+                    self.audio_cache.put_cover(result.song_id, cover_bytes).await;
+                    let cover_bytes = cover_bytes.clone();
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
                             pp.set_cover_bytes(&cover_bytes);
@@ -411,9 +463,11 @@ impl App {
 
         let song_id = next_song.id;
         let quality = self.config.quality;
+        let cover_url = next_song.album.cover_url.clone();
         let client = Arc::clone(client);
 
         self.pending_precache = Some(tokio::spawn(async move {
+            // Download audio, lyrics, and cover in parallel.
             let url = match client.song_url(song_id, quality).await {
                 Ok(u) => u,
                 Err(e) => {
@@ -421,21 +475,53 @@ impl App {
                     return None;
                 }
             };
-            let bytes = match client.http_client().get(&url).send().await {
-                Ok(resp) => match resp.bytes().await {
-                    Ok(b) => b.to_vec(),
-                    Err(e) => {
-                        tracing::warn!(error = %e, song_id, "Pre-cache: failed to read response");
-                        return None;
+
+            let audio_fut = async {
+                match client.http_client().get(&url).send().await {
+                    Ok(resp) => resp.bytes().await.map(|b| b.to_vec()),
+                    Err(e) => Err(e),
+                }
+            };
+            let lyrics_fut = client.lyrics(song_id);
+            let cover_fut = async {
+                if let Some(ref curl) = cover_url {
+                    match client.http_client().get(curl).send().await {
+                        Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
+                        Err(_) => None,
                     }
-                },
+                } else {
+                    None
+                }
+            };
+
+            let (audio_result, lyrics_result, cover_bytes) =
+                tokio::join!(audio_fut, lyrics_fut, cover_fut);
+
+            let audio_bytes = match audio_result {
+                Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!(error = %e, song_id, "Pre-cache: failed to download");
+                    tracing::warn!(error = %e, song_id, "Pre-cache: failed to download audio");
                     return None;
                 }
             };
-            tracing::info!(song_id, "Pre-cache: downloaded next song");
-            Some((song_id, bytes))
+
+            let lyrics = lyrics_result
+                .map_err(|e| tracing::warn!(error = %e, song_id, "Pre-cache: failed to fetch lyrics"))
+                .ok();
+
+            tracing::info!(
+                song_id,
+                audio_len = audio_bytes.len(),
+                has_lyrics = lyrics.is_some(),
+                has_cover = cover_bytes.is_some(),
+                "Pre-cache: downloaded next song"
+            );
+            Some(PreCacheResult {
+                song_id,
+                audio_bytes,
+                lyrics,
+                cover_bytes,
+            })
         }));
     }
 
@@ -451,9 +537,17 @@ impl App {
             return;
         };
         match handle.await {
-            Ok(Some((song_id, bytes))) => {
-                self.audio_cache.put(song_id, &bytes).await;
-                tracing::info!(song_id, "Pre-cache: written to disk cache");
+            Ok(Some(result)) => {
+                self.audio_cache.put(result.song_id, &result.audio_bytes).await;
+                if let Some(ref lyrics) = result.lyrics {
+                    if let Ok(json) = serde_json::to_vec(lyrics) {
+                        self.audio_cache.put_lyrics(result.song_id, &json).await;
+                    }
+                }
+                if let Some(ref cover_bytes) = result.cover_bytes {
+                    self.audio_cache.put_cover(result.song_id, cover_bytes).await;
+                }
+                tracing::info!(song_id = result.song_id, "Pre-cache: written to disk cache");
             }
             Ok(None) => {}
             Err(e) => {
