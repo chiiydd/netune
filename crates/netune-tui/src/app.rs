@@ -43,6 +43,8 @@ struct PendingPlayResult {
     /// Audio bytes — `None` when we already played from cache (cache hit).
     audio_bytes: Option<Vec<u8>>,
     lyrics: Option<Lyrics>,
+    /// Downloaded album cover image bytes (if available).
+    cover_bytes: Option<Vec<u8>>,
 }
 
 pub struct App {
@@ -141,10 +143,33 @@ impl App {
 
             // Fetch lyrics in background (non-blocking).
             let song_id = song.id;
+            let cover_url = song.album.cover_url.clone();
             self.pending_play = Some(tokio::spawn(async move {
-                let lyrics = client
-                    .lyrics(song_id)
-                    .await
+                let lyrics_fut = client.lyrics(song_id);
+                let cover_fut = async {
+                    if let Some(url) = cover_url {
+                        tracing::debug!(url = %url, "Downloading album cover");
+                        match reqwest::get(&url).await {
+                            Ok(resp) => {
+                                let bytes = resp.bytes().await.ok().map(|b| b.to_vec());
+                                tracing::debug!(
+                                    size = bytes.as_ref().map(|b| b.len()).unwrap_or(0),
+                                    "Cover download complete"
+                                );
+                                bytes
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to download cover");
+                                None
+                            }
+                        }
+                    } else {
+                        tracing::debug!("No cover URL available");
+                        None
+                    }
+                };
+                let (lyrics_result, cover_bytes) = tokio::join!(lyrics_fut, cover_fut);
+                let lyrics = lyrics_result
                     .map_err(|e| {
                         tracing::warn!(error = %e, "Failed to fetch lyrics");
                         e
@@ -153,17 +178,43 @@ impl App {
                 PendingPlayResult {
                     song_id,
                     _song: song,
-                    audio_bytes: None, // already played from cache
+                    audio_bytes: None,
                     lyrics,
+                    cover_bytes,
                 }
             }));
         } else {
             // ── Cache miss: spawn background task for URL + lyrics + download
             let quality = self.config.quality;
+            let cover_url = song.album.cover_url.clone();
             self.pending_play = Some(tokio::spawn(async move {
-                // Fetch song URL and lyrics concurrently.
-                let (url_result, lyrics_result) =
-                    tokio::join!(client.song_url(song.id, quality), client.lyrics(song.id));
+                let cover_fut = async {
+                    if let Some(url) = cover_url {
+                        tracing::debug!(url = %url, "Downloading album cover");
+                        match reqwest::get(&url).await {
+                            Ok(resp) => {
+                                let bytes = resp.bytes().await.ok().map(|b| b.to_vec());
+                                tracing::debug!(
+                                    size = bytes.as_ref().map(|b| b.len()).unwrap_or(0),
+                                    "Cover download complete"
+                                );
+                                bytes
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to download cover");
+                                None
+                            }
+                        }
+                    } else {
+                        tracing::debug!("No cover URL available");
+                        None
+                    }
+                };
+                let (url_result, lyrics_result, cover_bytes) = tokio::join!(
+                    client.song_url(song.id, quality),
+                    client.lyrics(song.id),
+                    cover_fut
+                );
 
                 let lyrics = lyrics_result
                     .map_err(|e| tracing::warn!(error = %e, "Failed to fetch lyrics"))
@@ -197,6 +248,7 @@ impl App {
                     _song: song,
                     audio_bytes,
                     lyrics,
+                    cover_bytes,
                 }
             }));
         }
@@ -254,6 +306,19 @@ impl App {
                     }
                 }
 
+                // Apply cover art.
+                if let Some(cover_bytes) = result.cover_bytes {
+                    tracing::debug!(size = cover_bytes.len(), "Applying cover art to player");
+                    for page in &mut self.page_stack {
+                        if let Page::Player(pp) = page {
+                            pp.set_cover_bytes(&cover_bytes);
+                            break;
+                        }
+                    }
+                } else {
+                    tracing::debug!("No cover bytes available");
+                }
+
                 // Clear loading state.
                 self.set_player_loading(false);
 
@@ -298,7 +363,11 @@ impl App {
         };
         match handle.await {
             Ok(Ok(result)) => {
-                tracing::info!(count = result.songs.len(), total = result.total, "Search OK");
+                tracing::info!(
+                    count = result.songs.len(),
+                    total = result.total,
+                    "Search OK"
+                );
                 if let Some(Page::Search(sp)) = self.page_stack.last_mut() {
                     sp.set_results(result.songs);
                 }
@@ -522,7 +591,10 @@ impl App {
 
     // ── Main loop ───────────────────────────────────────────────────────
 
-    pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+    pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B::Error: Send + Sync + 'static,
+    {
         // Auto-login from saved cookies.
         {
             let cookie_path = dirs::home_dir()
@@ -633,11 +705,7 @@ impl App {
 
             let action = if self.queue_panel.is_some() {
                 // Queue panel is open — forward events to it first.
-                let result = self
-                    .queue_panel
-                    .as_mut()
-                    .unwrap()
-                    .handle_event(&evt);
+                let result = self.queue_panel.as_mut().unwrap().handle_event(&evt);
                 match result {
                     QueuePanelResult::Close => {
                         self.queue_panel = None;
@@ -941,11 +1009,7 @@ impl App {
                     let vol = (player.volume() * 100.0) as u16;
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
-                            pp.update_from_player(
-                                player.position(),
-                                player.duration(),
-                                playing,
-                            );
+                            pp.update_from_player(player.position(), player.duration(), playing);
                             pp.set_volume(vol);
                             break;
                         }

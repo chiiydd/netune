@@ -62,9 +62,11 @@ impl Widget for QrCodeWidget {
                     let module_top = gy * 2;
                     let module_bot = module_top + 1;
 
-                    let t = gx < total_modules && module_top < total_modules
+                    let t = gx < total_modules
+                        && module_top < total_modules
                         && is_dark(&colors, modules, gx, module_top);
-                    let b = gx < total_modules && module_bot < total_modules
+                    let b = gx < total_modules
+                        && module_bot < total_modules
                         && is_dark(&colors, modules, gx, module_bot);
                     (t, b)
                 } else {
@@ -131,7 +133,12 @@ mod tests {
         widget.render(area, &mut buf);
 
         // 四角应为空白（安静区），验证 quiet zone 存在
-        let corners = [(0, 0), (area.width - 1, 0), (0, area.height - 1), (area.width - 1, area.height - 1)];
+        let corners = [
+            (0, 0),
+            (area.width - 1, 0),
+            (0, area.height - 1),
+            (area.width - 1, area.height - 1),
+        ];
         for (x, y) in corners {
             let cell = buf.cell((x, y)).unwrap();
             assert_eq!(

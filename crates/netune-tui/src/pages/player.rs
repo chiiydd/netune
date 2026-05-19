@@ -10,11 +10,15 @@
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::layout::Size;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::Protocol;
+use ratatui_image::{Image, Resize};
 
 use netune_core::models::Lyrics;
 use netune_core::models::Song;
@@ -38,6 +42,10 @@ pub struct PlayerPage {
     current_lyric_idx: usize,
     volume: u16,
     play_mode: PlayMode,
+    /// Decoded album cover image ready for rendering.
+    cover: Option<Protocol>,
+    /// Image picker — detects terminal capabilities once at startup.
+    picker: Picker,
 }
 
 impl Default for PlayerPage {
@@ -48,6 +56,7 @@ impl Default for PlayerPage {
 
 impl PlayerPage {
     pub fn new() -> Self {
+        let picker = Picker::halfblocks();
         Self {
             song: None,
             progress: 0.0,
@@ -60,6 +69,8 @@ impl PlayerPage {
             current_lyric_idx: 0,
             volume: 80,
             play_mode: PlayMode::Sequential,
+            cover: None,
+            picker,
         }
     }
 
@@ -71,6 +82,8 @@ impl PlayerPage {
         self.is_playing = true;
         self.current_lyric_idx = 0;
         self.lyrics = None;
+        // Clear old cover — will be set by set_cover_bytes() when download completes.
+        self.cover = None;
     }
 
     pub fn clear_lyrics(&mut self) {
@@ -104,6 +117,27 @@ impl PlayerPage {
         self.play_mode = mode;
     }
 
+    /// Set album cover from raw image bytes (called after async download).
+    pub fn set_cover_bytes(&mut self, bytes: &[u8]) {
+        tracing::debug!(size = bytes.len(), "Decoding cover image");
+        let Ok(img) = image::load_from_memory(bytes) else {
+            tracing::warn!("Failed to decode cover image");
+            return;
+        };
+        tracing::debug!(width = img.width(), height = img.height(), "Image decoded");
+        // Target size: 8 columns × 6 rows in terminal cells (small cover inside box).
+        let size = Size::new(8, 6);
+        match self.picker.new_protocol(img, size, Resize::Fit(None)) {
+            Ok(protocol) => {
+                tracing::debug!("Cover protocol created successfully");
+                self.cover = Some(protocol);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create image protocol");
+            }
+        }
+    }
+
     pub fn song(&self) -> Option<&Song> {
         self.song.as_ref()
     }
@@ -114,10 +148,10 @@ impl PlayerPage {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // top spacer
-                Constraint::Length(14), // MP3 player box
-                Constraint::Length(1), // separator
-                Constraint::Min(3),    // lyrics
+                Constraint::Length(1),  // top spacer
+                Constraint::Length(15), // MP3 player box
+                Constraint::Length(1),  // separator
+                Constraint::Min(3),     // lyrics
             ])
             .split(area);
 
@@ -157,6 +191,27 @@ impl PlayerPage {
         let border = format!("╭{}╮", "─".repeat(box_w));
         let bottom_border = format!("╰{}╯", "─".repeat(box_w));
 
+        // Pre-calculate box position for cover + info layout
+        let box_total_w = (box_w + 2) as u16; // │ + inner + │
+        let box_x = area.x + area.width.saturating_sub(box_total_w) / 2;
+
+        // Calculate centered layout: cover(8) + gap(2) + info as a unit
+        let cover_w = 8usize;
+        let gap = 2usize;
+        let max_info_w = [
+            display_width(&title),
+            display_width(&artists),
+            display_width(&album),
+        ]
+        .iter()
+        .max()
+        .copied()
+        .unwrap_or(0);
+        let unit_w = cover_w + gap + max_info_w;
+        let info_left_pad = box_w.saturating_sub(unit_w) / 2;
+        // cover_x is where the cover overlay should be drawn (inside the box)
+        let cover_overlay_x = box_x + 1 + info_left_pad as u16;
+
         let mut lines: Vec<Line> = Vec::with_capacity(14);
 
         // Line 0: top border
@@ -168,31 +223,49 @@ impl PlayerPage {
         if self.song.is_none() {
             // No song
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
-            lines.push(self.make_boxed_line("No song playing", Style::default().fg(Theme::MUTED), bc, box_w));
+            lines.push(self.make_boxed_line(
+                "No song playing",
+                Style::default().fg(Theme::MUTED),
+                bc,
+                box_w,
+            ));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
         } else {
-            // ── Song info (always shown when song exists) ──
-            // Line 2: title
-            lines.push(self.make_boxed_line(
-                &title,
-                Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
-                bc,
-                box_w,
-            ));
+            // ── Song info (positioned to the right of cover when cover exists) ──
+            let info_texts: [(&str, Style); 3] = [
+                (
+                    title.as_str(),
+                    Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
+                ),
+                (artists.as_str(), Style::default().fg(Theme::ACCENT)),
+                (album.as_str(), Style::default().fg(Theme::FG_DIM)),
+            ];
 
-            // Line 3: artist · album
-            let info = if album.is_empty() {
-                artists.clone()
+            if self.cover.is_some() {
+                // Position info to the right of cover with gap, centered as unit
+                for (text, style) in &info_texts {
+                    let text_w = display_width(text);
+                    let right_pad = box_w.saturating_sub(info_left_pad + cover_w + gap + text_w);
+                    lines.push(Line::from(vec![
+                        Span::styled("│", Style::default().fg(bc)),
+                        Span::styled(" ".repeat(info_left_pad + cover_w + gap), Style::default()),
+                        Span::styled(text.to_string(), *style),
+                        Span::styled(" ".repeat(right_pad), Style::default()),
+                        Span::styled("│", Style::default().fg(bc)),
+                    ]));
+                }
             } else {
-                format!("{artists} · {album}")
-            };
-            lines.push(self.make_boxed_line(&info, Style::default().fg(Theme::ACCENT), bc, box_w));
+                // No cover — center text normally
+                for (text, style) in &info_texts {
+                    lines.push(self.make_boxed_line(text, *style, bc, box_w));
+                }
+            }
 
-            // Line 4: blank
+            // Line 5: blank (spacing above progress bar)
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
             // ── Progress bar or loading spinner ──
@@ -213,7 +286,12 @@ impl PlayerPage {
                     Span::styled(" ".repeat(right), Style::default()),
                 ]);
                 lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
-                lines.push(self.make_boxed_line("--:-- / --:--", Style::default().fg(Theme::FG_DIM), bc, box_w));
+                lines.push(self.make_boxed_line(
+                    "--:-- / --:--",
+                    Style::default().fg(Theme::FG_DIM),
+                    bc,
+                    box_w,
+                ));
             } else {
                 let bar_width = 36usize;
                 let elapsed_str = format_duration(self.elapsed);
@@ -232,7 +310,12 @@ impl PlayerPage {
                     Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
                 ]);
                 lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
-                lines.push(self.make_boxed_line(&time_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
+                lines.push(self.make_boxed_line(
+                    &time_str,
+                    Style::default().fg(Theme::FG_DIM),
+                    bc,
+                    box_w,
+                ));
             }
 
             // Line 7: blank
@@ -244,7 +327,12 @@ impl PlayerPage {
             } else {
                 format!("⏮  ▶  ⏭  {}", self.play_mode_symbol())
             };
-            lines.push(self.make_boxed_line(&controls, Style::default().fg(Theme::MUTED), bc, box_w));
+            lines.push(self.make_boxed_line(
+                &controls,
+                Style::default().fg(Theme::MUTED),
+                bc,
+                box_w,
+            ));
 
             // Line 9: blank
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
@@ -259,14 +347,22 @@ impl PlayerPage {
                 "░".repeat(vol_empty),
                 self.volume
             );
-            lines.push(self.make_boxed_line(&vol_str, Style::default().fg(Theme::FG_DIM), bc, box_w));
+            lines.push(self.make_boxed_line(
+                &vol_str,
+                Style::default().fg(Theme::FG_DIM),
+                bc,
+                box_w,
+            ));
         }
 
         // Line 11: blank
         lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
 
         // Line 12: bottom border
-        lines.push(Line::from(Span::styled(bottom_border, Style::default().fg(bc))));
+        lines.push(Line::from(Span::styled(
+            bottom_border,
+            Style::default().fg(bc),
+        )));
 
         // Center vertically and render
         let total = lines.len() as u16;
@@ -280,10 +376,23 @@ impl PlayerPage {
                 );
             }
         }
+
+        // Overlay cover image at the calculated position
+        if let Some(ref protocol) = self.cover {
+            let cover_area = Rect::new(cover_overlay_x, start_y + 2, 8, 6);
+            let img_widget = Image::new(protocol);
+            f.render_widget(img_widget, cover_area);
+        }
     }
 
     /// Helper: build a box row `│ text... │` with centered-ish padding.
-    fn make_boxed_line(&self, text: &str, style: Style, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
+    fn make_boxed_line(
+        &self,
+        text: &str,
+        style: Style,
+        bc: ratatui::style::Color,
+        box_w: usize,
+    ) -> Line<'static> {
         let text_w = display_width(text);
         let total_pad = box_w.saturating_sub(text_w);
         let left_pad = total_pad / 2;
@@ -298,7 +407,12 @@ impl PlayerPage {
     }
 
     /// Helper: embed a rich Line inside a box row.
-    fn make_boxed_line_spans(&self, inner: Line<'static>, bc: ratatui::style::Color, box_w: usize) -> Line<'static> {
+    fn make_boxed_line_spans(
+        &self,
+        inner: Line<'static>,
+        bc: ratatui::style::Color,
+        box_w: usize,
+    ) -> Line<'static> {
         let text_w: usize = inner.spans.iter().map(|s| display_width(&s.content)).sum();
         let total_pad = box_w.saturating_sub(text_w);
         let left_pad = total_pad / 2;
@@ -331,11 +445,7 @@ impl PlayerPage {
                     .join(", ");
                 (song.name.clone(), artists, song.album.name.clone())
             }
-            None => (
-                "No song playing".to_string(),
-                String::new(),
-                String::new(),
-            ),
+            None => ("No song playing".to_string(), String::new(), String::new()),
         }
     }
 

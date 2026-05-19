@@ -278,9 +278,7 @@ impl HomePage {
                 PageAction::Push(super::Page::Playlist(pp))
             }
             MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
-            MenuAction::DailyRecommend => {
-                PageAction::FetchDailyRecommend
-            }
+            MenuAction::DailyRecommend => PageAction::FetchDailyRecommend,
             MenuAction::Login => PageAction::Push(super::Page::Login(super::LoginPage::new())),
             MenuAction::Logout => PageAction::Pop,
             MenuAction::Settings => {

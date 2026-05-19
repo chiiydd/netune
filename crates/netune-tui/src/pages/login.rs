@@ -1,11 +1,11 @@
 //! Login page — QR code scan login + browser cookie import.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::chrome::KeyHint;
 use crate::pages::PageAction;
@@ -60,9 +60,7 @@ impl LoginPage {
 
     /// Called when a new QR key is received.
     pub fn set_qr_key(&mut self, unikey: String) {
-        self.qr_url = Some(format!(
-            "https://music.163.com/login?codekey={unikey}"
-        ));
+        self.qr_url = Some(format!("https://music.163.com/login?codekey={unikey}"));
         self.unikey = Some(unikey);
         self.qr_state = QrLoginState::WaitingScan;
         self.error = None;
@@ -165,12 +163,8 @@ impl LoginPage {
         // ── Status text ──────────────────────────────────────────────────
         let (status_text, status_color) = match &self.qr_state {
             QrLoginState::WaitingForQr => ("正在获取二维码...".to_string(), Theme::WARNING),
-            QrLoginState::WaitingScan => {
-                ("请使用网易云音乐 App 扫码".to_string(), Theme::FG)
-            }
-            QrLoginState::Scanned => {
-                ("已扫码，请在手机上确认".to_string(), Theme::INFO)
-            }
+            QrLoginState::WaitingScan => ("请使用网易云音乐 App 扫码".to_string(), Theme::FG),
+            QrLoginState::Scanned => ("已扫码，请在手机上确认".to_string(), Theme::INFO),
             QrLoginState::Success => ("登录成功!".to_string(), Theme::SUCCESS),
             QrLoginState::Expired => {
                 let msg = self
@@ -368,7 +362,10 @@ impl LoginPage {
             QrLoginState::Expired => "已过期",
             QrLoginState::BrowserImport => "选择浏览器",
         };
-        vec![Span::styled(text.to_string(), Style::default().fg(Theme::MUTED))]
+        vec![Span::styled(
+            text.to_string(),
+            Style::default().fg(Theme::MUTED),
+        )]
     }
 
     pub fn hints(&self) -> Vec<KeyHint> {

@@ -5,11 +5,11 @@
 //! - **Normal**: navigating results with j/k.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
 
 use netune_core::models::Song;
 

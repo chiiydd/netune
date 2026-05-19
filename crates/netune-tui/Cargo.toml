@@ -24,6 +24,8 @@ dirs          = { workspace = true }
 reqwest       = { workspace = true }
 unicode-width = "0.2"
 filetime = "0.2.27"
+ratatui-image = { workspace = true }
+image = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

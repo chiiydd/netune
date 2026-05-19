@@ -47,8 +47,10 @@ futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "rustls-tls"], default-features = false }
 
 # TUI
-ratatui   = "0.29"
+ratatui   = "0.30"
 crossterm = "0.28"
+ratatui-image = { version = "11", default-features = false, features = ["crossterm", "image-defaults"] }
+image = "0.25"
 
 # Audio
 rodio = "0.22"

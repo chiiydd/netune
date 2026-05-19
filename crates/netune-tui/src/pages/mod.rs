@@ -122,8 +122,14 @@ impl Page {
     pub fn tick(&mut self) -> PageAction {
         match self {
             Page::Login(p) => p.tick(),
-            Page::Player(p) => { p.tick(); PageAction::None }
-            Page::Search(p) => { p.tick(); PageAction::None }
+            Page::Player(p) => {
+                p.tick();
+                PageAction::None
+            }
+            Page::Search(p) => {
+                p.tick();
+                PageAction::None
+            }
             _ => PageAction::None,
         }
     }

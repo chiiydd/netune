@@ -4,11 +4,11 @@
 //! Supports selecting and jumping to a song via keyboard.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState};
-use ratatui::Frame;
 
 use netune_core::models::Song;
 

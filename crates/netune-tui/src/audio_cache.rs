@@ -121,11 +121,8 @@ impl DiskAudioCache {
             return;
         }
         // Sort by access time (oldest first).
-        let mut entries: Vec<(u64, SystemTime)> = self
-            .index
-            .iter()
-            .map(|(id, e)| (*id, e.accessed))
-            .collect();
+        let mut entries: Vec<(u64, SystemTime)> =
+            self.index.iter().map(|(id, e)| (*id, e.accessed)).collect();
         entries.sort_by_key(|(_, t)| *t);
 
         let mut current_total = total;

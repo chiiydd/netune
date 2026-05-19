@@ -4,11 +4,11 @@
 //! - **Tracks**: browse songs in the selected playlist (name + artist + duration).
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
-use ratatui::Frame;
 
 use netune_core::models::{Playlist, Song};
 
