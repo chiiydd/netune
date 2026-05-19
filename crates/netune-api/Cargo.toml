@@ -40,3 +40,7 @@ harness = false
 [[bench]]
 name = "lrc_bench"
 harness = false
+
+[[bench]]
+name = "network_bench"
+harness = false

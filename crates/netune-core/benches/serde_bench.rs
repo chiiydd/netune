@@ -84,11 +84,46 @@ fn bench_config_roundtrip(c: &mut Criterion) {
     });
 }
 
+fn bench_song_serialize_5000(c: &mut Criterion) {
+    let songs: Vec<Song> = (0..5000).map(make_song).collect();
+
+    c.bench_function("song_serialize_5000", |b| {
+        b.iter(|| {
+            let _json = serde_json::to_string(black_box(&songs)).unwrap();
+        })
+    });
+}
+
+fn bench_song_deserialize_5000(c: &mut Criterion) {
+    let songs: Vec<Song> = (0..5000).map(make_song).collect();
+    let json = serde_json::to_string(&songs).unwrap();
+
+    c.bench_function("song_deserialize_5000", |b| {
+        b.iter(|| {
+            let _songs: Vec<Song> = serde_json::from_str(black_box(&json)).unwrap();
+        })
+    });
+}
+
+fn bench_song_from_slice(c: &mut Criterion) {
+    let songs: Vec<Song> = (0..1000).map(make_song).collect();
+    let json = serde_json::to_vec(&songs).unwrap();
+
+    c.bench_function("song_from_slice_1000", |b| {
+        b.iter(|| {
+            let _songs: Vec<Song> = serde_json::from_slice(black_box(&json)).unwrap();
+        })
+    });
+}
+
 criterion_group!(
     serde_benches,
     bench_song_serialize,
     bench_song_deserialize,
     bench_search_result_serialize,
     bench_config_roundtrip,
+    bench_song_serialize_5000,
+    bench_song_deserialize_5000,
+    bench_song_from_slice,
 );
 criterion_main!(serde_benches);

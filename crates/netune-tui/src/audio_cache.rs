@@ -72,23 +72,22 @@ impl DiskAudioCache {
     }
 
     /// Get cached audio bytes for a song.
-    pub fn get(&mut self, song_id: u64) -> Option<Vec<u8>> {
-        let entry = self.index.get_mut(&song_id)?;
-        let bytes = std::fs::read(&entry.path).ok()?;
-        entry.accessed = SystemTime::now();
-        // Update access time on disk too.
-        filetime::set_file_mtime(
-            &entry.path,
-            filetime::FileTime::from_system_time(entry.accessed),
-        )
-        .ok();
-        Some(bytes)
+    /// Uses async I/O to avoid blocking the tokio runtime on large file reads.
+    pub async fn get(&mut self, song_id: u64) -> Option<Vec<u8>> {
+        let path = {
+            let entry = self.index.get_mut(&song_id)?;
+            entry.accessed = SystemTime::now();
+            entry.path.clone()
+        };
+        // Use the index's SystemTime for LRU — no need for filetime::set_file_mtime.
+        tokio::fs::read(&path).await.ok()
     }
 
     /// Store audio bytes for a song.
-    pub fn put(&mut self, song_id: u64, bytes: &[u8]) {
+    /// Uses async I/O to avoid blocking the tokio runtime on writes.
+    pub async fn put(&mut self, song_id: u64, bytes: &[u8]) {
         let path = self.dir.join(format!("{song_id}.mp3"));
-        if let Err(e) = std::fs::write(&path, bytes) {
+        if let Err(e) = tokio::fs::write(&path, bytes).await {
             tracing::warn!(error = %e, song_id, "Failed to write audio cache");
             return;
         }
@@ -143,62 +142,62 @@ impl DiskAudioCache {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_cache_put_and_get() {
+    #[tokio::test]
+    async fn test_cache_put_and_get() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
-        cache.put(1, b"audio data");
-        assert_eq!(cache.get(1).unwrap(), b"audio data");
+        cache.put(1, b"audio data").await;
+        assert_eq!(cache.get(1).await.unwrap(), b"audio data");
     }
 
-    #[test]
-    fn test_cache_contains() {
+    #[tokio::test]
+    async fn test_cache_contains() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
-        cache.put(2, b"some audio bytes");
+        cache.put(2, b"some audio bytes").await;
         assert!(cache.contains(2));
         assert!(!cache.contains(999));
     }
 
-    #[test]
-    fn test_cache_get_miss() {
+    #[tokio::test]
+    async fn test_cache_get_miss() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
-        assert_eq!(cache.get(42), None);
+        assert_eq!(cache.get(42).await, None);
     }
 
-    #[test]
-    fn test_cache_overwrite() {
+    #[tokio::test]
+    async fn test_cache_overwrite() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
-        cache.put(1, b"old");
-        cache.put(1, b"new data");
-        assert_eq!(cache.get(1).unwrap(), b"new data");
+        cache.put(1, b"old").await;
+        cache.put(1, b"new data").await;
+        assert_eq!(cache.get(1).await.unwrap(), b"new data");
     }
 
-    #[test]
-    fn test_cache_eviction() {
+    #[tokio::test]
+    async fn test_cache_eviction() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), 10);
-        cache.put(1, b"aaaaa");
-        cache.put(2, b"bbbbb");
-        cache.put(3, b"ccccc");
+        cache.put(1, b"aaaaa").await;
+        cache.put(2, b"bbbbb").await;
+        cache.put(3, b"ccccc").await;
         // Total is 15 > 10, so oldest entry (song 1) should be evicted.
         assert!(!cache.contains(1));
         assert!(cache.contains(2));
         assert!(cache.contains(3));
     }
 
-    #[test]
-    fn test_cache_eviction_lru_order() {
+    #[tokio::test]
+    async fn test_cache_eviction_lru_order() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), 10);
-        cache.put(1, b"aaaaa");
-        cache.put(2, b"bbbbb");
+        cache.put(1, b"aaaaa").await;
+        cache.put(2, b"bbbbb").await;
         // Access song 1 so it becomes recently used.
-        cache.get(1);
+        cache.get(1).await;
         // Now put song 3 — song 2 should be evicted (least recently used).
-        cache.put(3, b"ccccc");
+        cache.put(3, b"ccccc").await;
         assert!(cache.contains(1));
         assert!(!cache.contains(2));
         assert!(cache.contains(3));

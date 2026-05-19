@@ -25,6 +25,11 @@ pub struct NeteaseApiClient {
 }
 
 impl NeteaseApiClient {
+    /// Expose the underlying reqwest HTTP client for connection reuse.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     pub fn new() -> Self {
         let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
         let mut headers = HeaderMap::new();
@@ -153,20 +158,24 @@ impl NeteaseApiClient {
             }
         }
 
-        let resp = self
+        let resp: reqwest::Response = self
             .http
             .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
         let status = resp.status();
-        let body = resp
-            .text()
+        let body_bytes = resp
+            .bytes()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
-        tracing::debug!(status = %status, path = %api_path, body_len = body.len(), "API response");
-        serde_json::from_str(&body)
-            .map_err(|e| ApiError::Message(format!("{e}: {}", &body[..body.len().min(200)])))
+        tracing::debug!(status = %status, path = %api_path, body_len = body_bytes.len(), "API response");
+        serde_json::from_slice(&body_bytes)
+            .map_err(|e| {
+                let preview = &body_bytes[..body_bytes.len().min(200)];
+                let preview_str = String::from_utf8_lossy(preview);
+                ApiError::Message(format!("{e}: {preview_str}"))
+            })
     }
 
     /// Send a request, check the code, and extract the inner data.
@@ -602,7 +611,9 @@ impl NeteaseClient for NeteaseApiClient {
 /// Each line is expected to be `[mm:ss.xx]text`. Lines without a valid
 /// timestamp or text are silently skipped.
 pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
-    let mut lines = Vec::new();
+    // Pre-allocate with estimated capacity: ~1 line per 30 chars
+    let estimated = lrc.len() / 30;
+    let mut lines = Vec::with_capacity(estimated);
     for line in lrc.lines() {
         let line = line.trim();
         // Expect at least "[mm:ss.xx]" prefix
@@ -614,25 +625,26 @@ pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
             None => continue,
         };
         let ts_str = &line[1..close];
-        let text = line[close + 1..].trim().to_string();
+        let text = line[close + 1..].trim();
 
         // Parse mm:ss.xx
-        let parts: Vec<&str> = ts_str.splitn(3, ':').collect();
-        if parts.len() != 2 {
+        let mut parts = ts_str.splitn(3, ':');
+        let (Some(min_str), Some(sec_str), None) = (parts.next(), parts.next(), parts.next()) else {
             continue;
-        }
-        let minutes: u64 = match parts[0].parse() {
+        };
+        let minutes: u64 = match min_str.parse() {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let sec_parts: Vec<&str> = parts[1].splitn(2, '.').collect();
-        let seconds: u64 = match sec_parts[0].parse() {
+        let mut sec_parts = sec_str.splitn(2, '.');
+        let sec_str = sec_parts.next().unwrap_or("");
+        let frac_str = sec_parts.next();
+        let seconds: u64 = match sec_str.parse() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let millis: u64 = if sec_parts.len() > 1 {
+        let millis: u64 = if let Some(frac) = frac_str {
             // "xx" can be 2 or 3 digits; normalise to ms
-            let frac = sec_parts[1];
             match frac.len() {
                 1 => frac.parse::<u64>().unwrap_or(0) * 100,
                 2 => frac.parse::<u64>().unwrap_or(0) * 10,
@@ -647,7 +659,7 @@ pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
         if text.is_empty() {
             continue;
         }
-        lines.push(LyricLine { timestamp, text });
+        lines.push(LyricLine { timestamp, text: text.to_string() });
     }
     lines
 }

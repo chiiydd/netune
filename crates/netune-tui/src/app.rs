@@ -118,7 +118,7 @@ impl App {
         }
 
         // Try to take pre-cached audio bytes for this song.
-        let cached_bytes = self.audio_cache.get(song.id);
+        let cached_bytes = self.audio_cache.get(song.id).await;
 
         let client = self.api_client.clone();
         let Some(client) = client else {
@@ -149,7 +149,7 @@ impl App {
                 let cover_fut = async {
                     if let Some(url) = cover_url {
                         tracing::debug!(url = %url, "Downloading album cover");
-                        match reqwest::get(&url).await {
+                        match client.http_client().get(&url).send().await {
                             Ok(resp) => {
                                 let bytes = resp.bytes().await.ok().map(|b| b.to_vec());
                                 tracing::debug!(
@@ -191,7 +191,7 @@ impl App {
                 let cover_fut = async {
                     if let Some(url) = cover_url {
                         tracing::debug!(url = %url, "Downloading album cover");
-                        match reqwest::get(&url).await {
+                        match client.http_client().get(&url).send().await {
                             Ok(resp) => {
                                 let bytes = resp.bytes().await.ok().map(|b| b.to_vec());
                                 tracing::debug!(
@@ -223,7 +223,7 @@ impl App {
                 let audio_bytes = match url_result {
                     Ok(url) => {
                         // Download full audio in background.
-                        match reqwest::get(&url).await {
+                        match client.http_client().get(&url).send().await {
                             Ok(resp) => match resp.bytes().await {
                                 Ok(b) => Some(b.to_vec()),
                                 Err(e) => {
@@ -285,7 +285,7 @@ impl App {
                 // Start playback if we got audio bytes (cache-miss path).
                 if let Some(bytes) = result.audio_bytes {
                     // Cache to disk for future plays.
-                    self.audio_cache.put(result.song_id, &bytes);
+                    self.audio_cache.put(result.song_id, &bytes).await;
                     if let Some(ref player) = self.player {
                         if let Err(e) = player.play_from_bytes(bytes) {
                             tracing::warn!(error = %e, "Playback from fetched bytes failed");
@@ -421,7 +421,7 @@ impl App {
                     return None;
                 }
             };
-            let bytes = match reqwest::get(&url).await {
+            let bytes = match client.http_client().get(&url).send().await {
                 Ok(resp) => match resp.bytes().await {
                     Ok(b) => b.to_vec(),
                     Err(e) => {
@@ -452,7 +452,7 @@ impl App {
         };
         match handle.await {
             Ok(Some((song_id, bytes))) => {
-                self.audio_cache.put(song_id, &bytes);
+                self.audio_cache.put(song_id, &bytes).await;
                 tracing::info!(song_id, "Pre-cache: written to disk cache");
             }
             Ok(None) => {}
