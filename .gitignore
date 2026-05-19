@@ -4,3 +4,7 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+
+.claude
+.hermes
+HERMES.md
