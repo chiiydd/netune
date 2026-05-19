@@ -493,4 +493,63 @@ mod tests {
         assert_eq!(q.current().unwrap().name, "New A");
         assert_eq!(q.current_index(), 0);
     }
+
+    #[test]
+    fn test_queue_save_and_load() {
+        let q = queue_with_three();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+        q.save_to_file(&path).unwrap();
+
+        let loaded = PlayQueue::load_from_file(&path).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded.current_index(), 0);
+        let names: Vec<&str> = loaded.songs().iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Song A", "Song B", "Song C"]);
+    }
+
+    #[test]
+    fn test_queue_save_preserves_mode() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopAll);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+        q.save_to_file(&path).unwrap();
+
+        let loaded = PlayQueue::load_from_file(&path).unwrap();
+        assert_eq!(loaded.mode(), PlayMode::LoopAll);
+    }
+
+    #[test]
+    fn test_queue_save_preserves_position() {
+        let mut q = queue_with_three();
+        q.skip_to(1);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+        q.save_to_file(&path).unwrap();
+
+        let loaded = PlayQueue::load_from_file(&path).unwrap();
+        assert_eq!(loaded.current_index(), 1);
+    }
+
+    #[test]
+    fn test_queue_load_nonexistent() {
+        let result =
+            PlayQueue::load_from_file(std::path::Path::new("/nonexistent/queue.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_queue_skip_to() {
+        let mut q = queue_with_three();
+        let song = q.skip_to(2).unwrap();
+        assert_eq!(song.name, "Song C");
+        assert_eq!(q.current_index(), 2);
+    }
+
+    #[test]
+    fn test_queue_skip_to_out_of_bounds() {
+        let mut q = queue_with_three();
+        assert!(q.skip_to(99).is_none());
+    }
 }

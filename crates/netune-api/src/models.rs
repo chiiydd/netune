@@ -400,4 +400,100 @@ mod tests {
         let tlyric = resp.tlyric.unwrap();
         assert!(tlyric.lyric.contains("你好世界"));
     }
+
+    // ─── InnerData tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_inner_data_search_success() {
+        let resp = ApiSearchResponse {
+            code: 200,
+            result: Some(ApiSearchResult { songs: vec![], song_count: 0 }),
+        };
+        let data = resp.into_data();
+        assert!(data.is_ok());
+    }
+
+    #[test]
+    fn test_inner_data_search_error_code() {
+        let resp = ApiSearchResponse { code: 400, result: None };
+        let err = resp.into_data().unwrap_err();
+        assert!(matches!(err, ApiError::Code(400)));
+    }
+
+    #[test]
+    fn test_inner_data_search_no_result() {
+        let resp = ApiSearchResponse { code: 200, result: None };
+        let err = resp.into_data().unwrap_err();
+        assert!(err.to_string().contains("no search result"));
+    }
+
+    #[test]
+    fn test_inner_data_song_url_success() {
+        let resp = ApiSongUrlResponse { code: 200, data: vec![] };
+        let data = resp.into_data();
+        assert!(data.is_ok());
+    }
+
+    #[test]
+    fn test_inner_data_song_url_error() {
+        let resp = ApiSongUrlResponse { code: -1, data: vec![] };
+        let err = resp.into_data().unwrap_err();
+        assert!(matches!(err, ApiError::Code(-1)));
+    }
+
+    #[test]
+    fn test_inner_data_playlist_success() {
+        let resp = ApiPlaylistResponse {
+            code: 200,
+            playlist: Some(ApiPlaylist { id: 1, name: "p".into(), track_count: 0, tracks: vec![] }),
+        };
+        let data = resp.into_data();
+        assert!(data.is_ok());
+    }
+
+    #[test]
+    fn test_inner_data_playlist_no_data() {
+        let resp = ApiPlaylistResponse { code: 200, playlist: None };
+        let err = resp.into_data().unwrap_err();
+        assert!(err.to_string().contains("no playlist data"));
+    }
+
+    // ─── PaginationInfo tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_pagination_info_search() {
+        let resp = ApiSearchResponse {
+            code: 200,
+            result: Some(ApiSearchResult { songs: vec![], song_count: 42 }),
+        };
+        assert_eq!(resp.total(), 42);
+        assert!(resp.has_more(0, 10));
+        assert!(!resp.has_more(40, 10));
+    }
+
+    #[test]
+    fn test_pagination_info_playlists() {
+        let resp = ApiUserPlaylistsResponse { code: 200, playlist: vec![] };
+        assert!(!resp.has_more(0, 10));
+        assert!(!resp.has_more(50, 100));
+    }
+
+    #[test]
+    fn test_pagination_result_has_more() {
+        let r = PaginationResult {
+            items: (),
+            offset: 0,
+            limit: 10,
+            total: 100,
+        };
+        assert!(r.has_more());
+
+        let r = PaginationResult {
+            items: (),
+            offset: 90,
+            limit: 10,
+            total: 100,
+        };
+        assert!(!r.has_more());
+    }
 }

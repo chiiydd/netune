@@ -68,6 +68,9 @@ num-bigint = "0.4"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
 # Utilities
 log      = "0.4"
 url      = "2"

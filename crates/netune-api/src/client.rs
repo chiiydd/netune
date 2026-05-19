@@ -601,7 +601,7 @@ impl NeteaseClient for NeteaseApiClient {
 ///
 /// Each line is expected to be `[mm:ss.xx]text`. Lines without a valid
 /// timestamp or text are silently skipped.
-fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
+pub fn parse_lrc(lrc: &str) -> Vec<LyricLine> {
     let mut lines = Vec::new();
     for line in lrc.lines() {
         let line = line.trim();
@@ -704,6 +704,86 @@ mod tests {
         assert_eq!(song.album.name, "");
         assert!(song.album.cover_url.is_none());
         assert!(song.artists.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod parse_lrc_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_lrc_basic() {
+        let lines = parse_lrc("[00:05.30]Hello World");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].timestamp, 5300);
+        assert_eq!(lines[0].text, "Hello World");
+    }
+
+    #[test]
+    fn test_parse_lrc_multiple_lines() {
+        let input = "[00:00.00]Line 1\n[00:05.30]Line 2\n[01:23.45]Line 3";
+        let lines = parse_lrc(input);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].timestamp, 0);
+        assert_eq!(lines[0].text, "Line 1");
+        assert_eq!(lines[1].timestamp, 5300);
+        assert_eq!(lines[1].text, "Line 2");
+        assert_eq!(lines[2].timestamp, 83450);
+        assert_eq!(lines[2].text, "Line 3");
+    }
+
+    #[test]
+    fn test_parse_lrc_empty() {
+        let lines = parse_lrc("");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lrc_skip_metadata() {
+        let input = "[ti:Test]\n[ar:Artist]\n[00:05.00]Real line";
+        let lines = parse_lrc(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Real line");
+    }
+
+    #[test]
+    fn test_parse_lrc_three_digit_millis() {
+        let lines = parse_lrc("[00:05.123]Text");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].timestamp, 5123);
+    }
+
+    #[test]
+    fn test_parse_lrc_two_digit_millis() {
+        let lines = parse_lrc("[00:05.30]Text");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].timestamp, 5300);
+    }
+
+    #[test]
+    fn test_parse_lrc_no_millis() {
+        let lines = parse_lrc("[00:05]Text");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].timestamp, 5000);
+    }
+
+    #[test]
+    fn test_parse_lrc_skip_no_text() {
+        let lines = parse_lrc("[00:05.00]");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lrc_skip_bad_format() {
+        let lines = parse_lrc("not a lyric line");
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lrc_chinese() {
+        let lines = parse_lrc("[00:05.00]你好世界");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "你好世界");
     }
 }
 

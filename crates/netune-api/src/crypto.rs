@@ -57,7 +57,8 @@ pub fn make_request_params(data: &str, path: &str) -> Result<Vec<(String, String
 // ─── AES-128-ECB helpers ─────────────────────────────────────────────────────
 
 /// PKCS7-padded AES-128-ECB encryption (manual block-by-block).
-fn aes_ecb_encrypt(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
+#[doc(hidden)]
+pub fn aes_ecb_encrypt(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     use aes::cipher::BlockEncrypt;
 
     let cipher = Aes128::new(key.into());
@@ -168,8 +169,9 @@ fn rsa_encrypt_key(key: &[u8]) -> Result<String> {
 }
 
 /// PKCS7-padded AES-128-ECB decryption (manual block-by-block).
+#[doc(hidden)]
 #[allow(dead_code)]
-fn aes_ecb_decrypt(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
+pub fn aes_ecb_decrypt(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     use aes::cipher::BlockDecrypt;
 
     let cipher = Aes128::new(key.into());

@@ -30,17 +30,22 @@ impl DiskAudioCache {
             .join(".netune")
             .join("audio_cache");
         std::fs::create_dir_all(&dir).ok();
-        let mut cache = Self {
-            dir,
-            max_bytes: DEFAULT_MAX_CACHE_BYTES,
-            index: HashMap::new(),
-        };
+        let mut cache = Self::with_dir(dir, DEFAULT_MAX_CACHE_BYTES);
         cache.scan_existing();
         cache
     }
 
+    /// Create a cache rooted at `dir` with a custom max size, without scanning for existing files.
+    pub fn with_dir(dir: PathBuf, max_bytes: u64) -> Self {
+        Self {
+            dir,
+            max_bytes,
+            index: HashMap::new(),
+        }
+    }
+
     /// Scan existing files in the cache directory to rebuild the index.
-    fn scan_existing(&mut self) {
+    pub fn scan_existing(&mut self) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
@@ -134,5 +139,87 @@ impl DiskAudioCache {
                 tracing::info!(song_id, "Evicted from audio cache");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_put_and_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        cache.put(1, b"audio data");
+        assert_eq!(cache.get(1).unwrap(), b"audio data");
+    }
+
+    #[test]
+    fn test_cache_contains() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        cache.put(2, b"some audio bytes");
+        assert!(cache.contains(2));
+        assert!(!cache.contains(999));
+    }
+
+    #[test]
+    fn test_cache_get_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        assert_eq!(cache.get(42), None);
+    }
+
+    #[test]
+    fn test_cache_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        cache.put(1, b"old");
+        cache.put(1, b"new data");
+        assert_eq!(cache.get(1).unwrap(), b"new data");
+    }
+
+    #[test]
+    fn test_cache_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), 10);
+        cache.put(1, b"aaaaa");
+        cache.put(2, b"bbbbb");
+        cache.put(3, b"ccccc");
+        // Total is 15 > 10, so oldest entry (song 1) should be evicted.
+        assert!(!cache.contains(1));
+        assert!(cache.contains(2));
+        assert!(cache.contains(3));
+    }
+
+    #[test]
+    fn test_cache_eviction_lru_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), 10);
+        cache.put(1, b"aaaaa");
+        cache.put(2, b"bbbbb");
+        // Access song 1 so it becomes recently used.
+        cache.get(1);
+        // Now put song 3 — song 2 should be evicted (least recently used).
+        cache.put(3, b"ccccc");
+        assert!(cache.contains(1));
+        assert!(!cache.contains(2));
+        assert!(cache.contains(3));
+    }
+
+    #[test]
+    fn test_cache_scan_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("42.mp3"), b"cached content").unwrap();
+        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        cache.scan_existing();
+        assert!(cache.contains(42));
+    }
+
+    #[test]
+    fn test_cache_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        assert_eq!(cache.dir(), dir.path());
     }
 }

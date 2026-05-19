@@ -27,5 +27,16 @@ chrono      = { workspace = true }
 qrcode      = { workspace = true }
 rookie      = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 [lints]
 workspace = true
+
+[[bench]]
+name = "crypto_bench"
+harness = false
+
+[[bench]]
+name = "lrc_bench"
+harness = false
