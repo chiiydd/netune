@@ -131,9 +131,6 @@ impl App {
             }
         }
 
-        // Try to take pre-cached audio bytes for this song.
-        let cached_bytes = self.audio_cache.get(song.id).await;
-
         let client = self.api_client.clone();
         let Some(client) = client else {
             tracing::warn!("Cannot play song — no API client");
@@ -141,26 +138,35 @@ impl App {
             return;
         };
 
-        // Pre-read cached metadata from disk (fast, non-blocking to event loop).
-        let (cached_lyrics, cached_cover) = tokio::join!(
-            self.audio_cache.get_lyrics(song.id),
-            self.audio_cache.get_cover(song.id),
-        );
-
-        // Clone what the background task needs — avoids borrow issues.
+        // Clone everything the background task needs — avoids borrow issues.
+        // ALL disk I/O happens inside the spawned task.
         let player = self.player.clone();
         let quality = self.config.quality;
         let volume = self.config.volume;
         let song_id = song.id;
         let cover_url = song.album.cover_url.clone();
+        let cache_dir = self.audio_cache.dir().clone();
 
-        // Spawn background task: play audio + fetch any missing metadata.
-        // This keeps the event loop responsive during playback setup.
+        // Spawn background task — do_play_song returns IMMEDIATELY.
         self.pending_play = Some(tokio::spawn(async move {
+            // ── Disk cache reads (all parallel) ──
+            let audio_path = cache_dir.join(format!("{song_id}.mp3"));
+            let lyrics_path = cache_dir.join(format!("{song_id}.lrc"));
+            let cover_path = cache_dir.join(format!("{song_id}.cover"));
+
+            let (audio_result, lyrics_bytes, cover_bytes) = tokio::join!(
+                tokio::fs::read(&audio_path),
+                tokio::fs::read(&lyrics_path),
+                tokio::fs::read(&cover_path),
+            );
+
+            let cached_audio = audio_result.ok();
+            let cached_lyrics = lyrics_bytes.ok();
+            let cached_cover = cover_bytes.ok();
+
             // ── Audio playback ──
             let mut audio_for_cache = None;
-            if let Some(bytes) = cached_bytes {
-                // Cache hit: play from cached bytes.
+            if let Some(bytes) = cached_audio {
                 tracing::info!(song_id, "Playing from audio cache");
                 if let Some(ref p) = player {
                     if let Err(e) = p.play_from_bytes(bytes).await {
