@@ -146,7 +146,8 @@ impl AudioPlayer for NetunePlayer {
             // EARLY CHECK: bail out before heavy work if superseded.
             // This prevents multiple tasks from competing for the audio device.
             if gen_ref.load(Ordering::SeqCst) != my_gen {
-                tracing::debug!("Playback superseded before decode, discarding early");
+                tracing::warn!(my_gen, current_gen = gen_ref.load(Ordering::SeqCst),
+                    "Playback superseded before decode, discarding early");
                 return Ok(());
             }
 

@@ -236,17 +236,18 @@ impl App {
                 }
             };
 
-            // ── Run audio playback, lyrics fetch, and cover fetch in PARALLEL ──
-            let audio_fut = async {
-                if let (Some(p), Some(bytes)) = (&player, &audio_bytes) {
+            // ── Start audio playback FIRST (critical path) ──
+            if let Some(ref p) = player {
+                if let Some(ref bytes) = audio_bytes {
                     if let Err(e) = p.play_from_bytes(bytes.clone()).await {
                         tracing::warn!(error = %e, "Playback failed");
                     } else {
                         p.set_volume(volume);
                     }
                 }
-            };
+            }
 
+            // ── Fetch lyrics and cover in PARALLEL (non-critical) ──
             let lyrics_fut = async {
                 match cached_lyrics {
                     Some(bytes) => serde_json::from_slice::<Lyrics>(&bytes).ok(),
@@ -274,7 +275,7 @@ impl App {
                 cover_bytes
             };
 
-            let (_, lyrics, cover) = tokio::join!(audio_fut, lyrics_fut, cover_fut);
+            let (lyrics, cover) = tokio::join!(lyrics_fut, cover_fut);
 
             // Decode cover image in a blocking thread so the async runtime
             // isn't blocked by CPU-intensive image processing.
