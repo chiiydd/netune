@@ -249,8 +249,7 @@ impl NeteaseClient for NeteaseApiClient {
         tracing::debug!(url = %url, "QR generate request");
         let resp = self
             .http
-            .post(&url)
-            .form(&[("type", "1")])
+            .get(&format!("{url}?type=1"))
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
@@ -287,11 +286,14 @@ impl NeteaseClient for NeteaseApiClient {
         let nmtid = hex::encode(nmtid_buf);
         self.cookie_jar
             .add_cookie_str(&format!("NMTID={nmtid}"), &base_url);
-
+        let check_url = format!(
+            "{}?key={}&check=true&type=1",
+            url_str,
+            urlencoding::encode(key)
+        );
         let resp = self
             .http
-            .post(&url_str)
-            .form(&[("key", key), ("type", "1")])
+            .get(&check_url)
             .send()
             .await
             .map_err(|e| netune_core::NetuneError::Network(e.to_string()))?;
