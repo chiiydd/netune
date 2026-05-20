@@ -267,21 +267,32 @@ impl App {
                 let _ = tokio::fs::write(&cover_path, bytes).await;
             }
 
-            // Decode cover image in the background task so the event loop
+            // Decode cover image in a blocking thread so the async runtime
             // isn't blocked by CPU-intensive image processing.
-            let cover_protocol = cover.and_then(|bytes| {
-                use ratatui::layout::Size;
-                use ratatui_image::Resize;
-                let picker = picker?;
-                let t = std::time::Instant::now();
-                let img = image::load_from_memory(&bytes).ok()?;
-                let size = Size::new(8, 6);
-                let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
-                if protocol.is_some() {
-                    tracing::info!(ms = t.elapsed().as_millis(), "Cover decoded in background task");
+            let cover_protocol = match cover {
+                Some(bytes) => {
+                    match tokio::task::spawn_blocking(move || {
+                        use ratatui::layout::Size;
+                        use ratatui_image::Resize;
+                        let picker = picker?;
+                        let t = std::time::Instant::now();
+                        let img = image::load_from_memory(&bytes).ok()?;
+                        let size = Size::new(8, 6);
+                        let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
+                        if protocol.is_some() {
+                            tracing::info!(ms = t.elapsed().as_millis(), "Cover decoded in blocking thread");
+                        }
+                        protocol
+                    }).await {
+                        Ok(protocol) => protocol,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Cover decode task failed");
+                            None
+                        }
+                    }
                 }
-                protocol
-            });
+                None => None,
+            };
 
             PendingPlayResult {
                 song_id,
