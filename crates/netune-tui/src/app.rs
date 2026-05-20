@@ -444,12 +444,10 @@ impl App {
         let Some(ref client) = self.api_client else {
             return;
         };
-        let songs = self.play_queue.songs();
-        let idx = self.play_queue.current_index();
-        if songs.is_empty() || idx + 1 >= songs.len() {
-            return;
-        }
-        let next_song = &songs[idx + 1];
+        let next_song = match self.play_queue.peek_next() {
+            Some(s) => s.clone(),
+            None => return,
+        };
 
         // Already cached — nothing to do.
         if self.audio_cache.contains(next_song.id) {

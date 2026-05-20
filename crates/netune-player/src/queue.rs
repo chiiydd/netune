@@ -22,6 +22,9 @@ pub struct PlayQueue {
     current: usize,
     mode: PlayMode,
     history: Vec<usize>,
+    /// Pre-computed next index for shuffle mode, so `peek_next()` returns
+    /// the same song that `advance()` will actually play next.
+    next_shuffle_idx: Option<usize>,
 }
 
 impl PlayQueue {
@@ -31,6 +34,7 @@ impl PlayQueue {
             current: 0,
             mode: PlayMode::Sequential,
             history: Vec::new(),
+            next_shuffle_idx: None,
         }
     }
 
@@ -114,6 +118,55 @@ impl PlayQueue {
         }
     }
 
+    /// Pick a random index different from `current`.
+    fn pick_shuffle_index(songs_len: usize, current: usize) -> usize {
+        if songs_len <= 1 {
+            return current;
+        }
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize;
+        let mut idx = seed % songs_len;
+        if idx == current {
+            idx = (idx + 1) % songs_len;
+        }
+        idx
+    }
+
+    /// Pre-compute and store the next shuffle index.
+    fn ensure_shuffle_peek(&mut self) {
+        if self.mode == PlayMode::Shuffle && self.next_shuffle_idx.is_none() {
+            self.next_shuffle_idx =
+                Some(Self::pick_shuffle_index(self.songs.len(), self.current));
+        }
+    }
+
+    /// Peek at the next song without advancing the queue.
+    ///
+    /// Returns what `advance()` would return if called right now.
+    pub fn peek_next(&mut self) -> Option<&Song> {
+        if self.songs.is_empty() {
+            return None;
+        }
+        let next_idx = match self.mode {
+            PlayMode::Sequential => {
+                if self.current + 1 >= self.songs.len() {
+                    return None;
+                }
+                self.current + 1
+            }
+            PlayMode::LoopAll => (self.current + 1) % self.songs.len(),
+            PlayMode::LoopOne => self.current,
+            PlayMode::Shuffle => {
+                self.ensure_shuffle_peek();
+                self.next_shuffle_idx.unwrap()
+            }
+        };
+        self.songs.get(next_idx)
+    }
+
     /// Advance to the next song based on play mode.
     pub fn advance(&mut self) -> Option<&Song> {
         if self.songs.is_empty() {
@@ -135,13 +188,11 @@ impl PlayQueue {
                 // Stay on current — re-play.
             }
             PlayMode::Shuffle => {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let seed = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as usize;
                 self.history.push(self.current);
-                self.current = seed % self.songs.len();
+                let next = self.next_shuffle_idx.take().unwrap_or_else(|| {
+                    Self::pick_shuffle_index(self.songs.len(), self.current)
+                });
+                self.current = next;
             }
         }
         self.songs.get(self.current)
@@ -232,6 +283,7 @@ impl PlayQueue {
             current: snapshot.current,
             mode: snapshot.mode,
             history: Vec::new(),
+            next_shuffle_idx: None,
         })
     }
 }
@@ -551,5 +603,83 @@ mod tests {
     fn test_queue_skip_to_out_of_bounds() {
         let mut q = queue_with_three();
         assert!(q.skip_to(99).is_none());
+    }
+
+    #[test]
+    fn test_peek_next_sequential() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Sequential);
+
+        // At index 0, next should be Song B.
+        assert_eq!(q.peek_next().unwrap().name, "Song B");
+        // Queue state unchanged — still at index 0.
+        assert_eq!(q.current_index(), 0);
+        assert_eq!(q.current().unwrap().name, "Song A");
+
+        // Advance to last song — peek_next should return None.
+        q.advance(); // B
+        q.advance(); // C
+        assert!(q.peek_next().is_none());
+    }
+
+    #[test]
+    fn test_peek_next_loop_all() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopAll);
+
+        assert_eq!(q.peek_next().unwrap().name, "Song B");
+
+        // At last song, peek_next wraps around.
+        q.advance(); // B
+        q.advance(); // C
+        assert_eq!(q.peek_next().unwrap().name, "Song A");
+    }
+
+    #[test]
+    fn test_peek_next_loop_one() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::LoopOne);
+
+        // peek_next returns the current song.
+        assert_eq!(q.peek_next().unwrap().name, "Song A");
+        assert_eq!(q.current_index(), 0);
+    }
+
+    #[test]
+    fn test_peek_next_shuffle_consistent_with_advance() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Shuffle);
+
+        // peek_next should return a song, and advance should return the same one.
+        let peeked_name = q.peek_next().unwrap().name.clone();
+        let advanced_name = q.advance().unwrap().name.clone();
+        assert_eq!(peeked_name, advanced_name);
+    }
+
+    #[test]
+    fn test_peek_next_shuffle_returns_different_song() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Shuffle);
+
+        // With 3 songs, peek_next should almost certainly return a different song.
+        // (Technically could return the same with 1/3 probability, but very unlikely
+        // across multiple calls.)
+        let mut got_different = false;
+        for _ in 0..20 {
+            let mut q = queue_with_three();
+            q.set_repeat_mode(PlayMode::Shuffle);
+            let peeked = q.peek_next().unwrap().name.clone();
+            if peeked != "Song A" {
+                got_different = true;
+                break;
+            }
+        }
+        assert!(got_different, "peek_next should return a different song in shuffle mode");
+    }
+
+    #[test]
+    fn test_peek_next_empty_queue() {
+        let mut q = PlayQueue::new();
+        assert!(q.peek_next().is_none());
     }
 }
