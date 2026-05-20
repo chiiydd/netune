@@ -124,43 +124,51 @@ impl AudioPlayer for NetunePlayer {
             .ok()
             .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
 
-        // Run blocking decode + device open on a dedicated thread.
-        tokio::task::spawn_blocking(move || {
-            let cursor = Cursor::new(bytes);
-            let decoder = Decoder::new(cursor)
-                .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
+        // Use a dedicated thread for heavy audio work — never blocks tokio.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("audio-playback".into())
+            .spawn(move || {
+                let result = (|| -> std::result::Result<(), NetuneError> {
+                    let cursor = Cursor::new(bytes);
+                    let decoder = Decoder::new(cursor)
+                        .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
 
-            let duration = decoder
-                .total_duration()
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0);
+                    let duration = decoder
+                        .total_duration()
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
 
-            let mut device_sink = DeviceSinkBuilder::open_default_sink()
-                .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
-            device_sink.log_on_drop(false);
+                    let mut device_sink = DeviceSinkBuilder::open_default_sink()
+                        .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+                    device_sink.log_on_drop(false);
 
-            let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
+                    let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
 
-            if let Some(vol) = prev_volume {
-                rodio_player.set_volume(vol);
-            }
+                    if let Some(vol) = prev_volume {
+                        rodio_player.set_volume(vol);
+                    }
 
-            rodio_player.append(decoder);
+                    rodio_player.append(decoder);
 
-            let mut state = state_ref.lock().map_err(|e| {
-                NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
-            })?;
-            *state = Some(PlaybackState {
-                _device_sink: device_sink,
-                player: rodio_player,
-                duration,
-            });
+                    let mut state = state_ref.lock().map_err(|e| {
+                        NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
+                    })?;
+                    *state = Some(PlaybackState {
+                        _device_sink: device_sink,
+                        player: rodio_player,
+                        duration,
+                    });
 
-            tracing::debug!(duration, "Playback started from cached bytes");
-            Ok::<(), NetuneError>(())
-        })
-        .await
-        .map_err(|e| NetuneError::Player(format!("Playback task failed: {e}")))?
+                    tracing::debug!(duration, "Playback started from cached bytes");
+                    Ok(())
+                })();
+                let _ = tx.send(result);
+            })
+            .map_err(|e| NetuneError::Player(format!("Failed to spawn audio thread: {e}")))?;
+
+        rx.await
+            .map_err(|e| NetuneError::Player(format!("Audio thread channel error: {e}")))?
     }
 
     fn pause(&self) {
