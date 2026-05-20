@@ -280,6 +280,9 @@ impl SearchPage {
                     return PageAction::AddToQueue(song);
                 }
             }
+            KeyCode::Char('A') if len > 0 => {
+                return PageAction::AddManyToQueue(self.results.clone());
+            }
             _ => {}
         }
         PageAction::None
@@ -316,14 +319,59 @@ impl SearchPage {
 
     pub fn hints(&self) -> Vec<KeyHint> {
         match self.mode {
-            SearchMode::Input => vec![KeyHint::new("⏎", "search"), KeyHint::new("Esc", "navigate")],
+            SearchMode::Input => vec![
+                KeyHint::new("⏎", "search"),
+                KeyHint::new("Tab", "queue"),
+                KeyHint::new("Esc", "navigate"),
+            ],
             SearchMode::Normal => vec![
                 KeyHint::new("j/k", "move"),
                 KeyHint::new("⏎", "play"),
                 KeyHint::new("a", "add to queue"),
+                KeyHint::new("A", "add all"),
+                KeyHint::new("Tab", "queue"),
                 KeyHint::new("i", "edit"),
                 KeyHint::new("Esc", "back"),
             ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use netune_core::models::{Album, Artist, QualityLevel};
+
+    fn make_song(id: u64, name: &str) -> Song {
+        Song {
+            id,
+            name: name.to_string(),
+            artists: vec![Artist {
+                id: 1,
+                name: "Artist".to_string(),
+            }],
+            album: Album {
+                id: 1,
+                name: "Album".to_string(),
+                cover_url: None,
+            },
+            duration: 180_000,
+            quality: QualityLevel::Standard,
+        }
+    }
+
+    #[test]
+    fn shift_a_adds_all_search_results_to_queue() {
+        let mut page = SearchPage::new();
+        page.set_results(vec![make_song(1, "A"), make_song(2, "B")]);
+
+        match page.handle_normal(KeyCode::Char('A')) {
+            PageAction::AddManyToQueue(songs) => {
+                assert_eq!(songs.len(), 2);
+                assert_eq!(songs[0].name, "A");
+                assert_eq!(songs[1].name, "B");
+            }
+            _ => panic!("expected AddManyToQueue"),
         }
     }
 }

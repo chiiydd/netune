@@ -450,6 +450,20 @@ impl App {
         }
     }
 
+    fn clear_player_pages(&mut self) {
+        for page in &mut self.page_stack {
+            if let Page::Player(pp) = page {
+                pp.clear_song();
+            }
+        }
+    }
+
+    fn sync_queue_panel(&mut self) {
+        if let Some(ref mut qp) = self.queue_panel {
+            qp.sync_queue_state(self.play_queue.current_index(), self.play_queue.len());
+        }
+    }
+
     /// Check whether the background search task has completed; if so, apply
     /// results and clear loading state.
     async fn poll_pending_search(&mut self) {
@@ -876,6 +890,15 @@ impl App {
                         self.queue_panel = None;
                         PageAction::JumpToQueueItem(idx)
                     }
+                    QueuePanelResult::Remove(idx) => PageAction::RemoveQueueItem(idx),
+                    QueuePanelResult::Clear => {
+                        self.queue_panel = None;
+                        PageAction::ClearQueue
+                    }
+                    QueuePanelResult::GoPlayer => {
+                        self.queue_panel = None;
+                        PageAction::GoPlayer
+                    }
                     QueuePanelResult::NotHandled => {
                         // Queue panel didn't handle it — still consume the
                         // event so it doesn't leak to the underlying page
@@ -884,7 +907,14 @@ impl App {
                     }
                 }
             } else if let Some(page) = self.page_stack.last_mut() {
-                page.handle_event(&evt).await
+                if matches!(
+                    evt,
+                    Event::Key(k) if k.kind == KeyEventKind::Press && k.code == KeyCode::Tab
+                ) {
+                    PageAction::ToggleQueuePanel
+                } else {
+                    page.handle_event(&evt).await
+                }
             } else {
                 PageAction::None
             };
@@ -1135,6 +1165,17 @@ impl App {
             PageAction::AddToQueue(song) => {
                 tracing::info!(song_id = song.id, title = %song.name, "Added to queue");
                 self.play_queue.push(song);
+                self.sync_queue_panel();
+            }
+
+            // ── Add many to queue ──────────────────────────────────────
+            PageAction::AddManyToQueue(songs) => {
+                let count = songs.len();
+                for song in songs {
+                    self.play_queue.push(song);
+                }
+                tracing::info!(count, "Added songs to queue");
+                self.sync_queue_panel();
             }
 
             // ── Play queue ──────────────────────────────────────────────
@@ -1323,6 +1364,59 @@ impl App {
                     }
                 }
             }
+
+            // ── Remove queue item ──────────────────────────────────────
+            PageAction::RemoveQueueItem(index) => {
+                let was_current = index == self.play_queue.current_index();
+                if self.play_queue.remove(index).is_some() {
+                    self.sync_queue_panel();
+                    if self.play_queue.is_empty() {
+                        if let Some(ref player) = self.player {
+                            player.stop();
+                        }
+                        self.clear_player_pages();
+                    } else if was_current {
+                        let song = self.play_queue.current().cloned();
+                        if let Some(song) = song {
+                            self.do_play_song(song).await;
+                        }
+                    }
+                }
+            }
+
+            // ── Clear queue ────────────────────────────────────────────
+            PageAction::ClearQueue => {
+                self.play_queue.clear();
+                if let Some(handle) = self.pending_play.take() {
+                    handle.abort();
+                }
+                if let Some(handle) = self.pending_precache.take() {
+                    handle.abort();
+                }
+                if let Some(ref player) = self.player {
+                    player.stop();
+                }
+                self.clear_player_pages();
+                self.sync_queue_panel();
+            }
+
+            // ── Go to player ───────────────────────────────────────────
+            PageAction::GoPlayer => {
+                self.page_stack
+                    .push(Page::Player(crate::pages::player::PlayerPage::new()));
+                self.sync_player_state();
+                for page in &mut self.page_stack {
+                    if let Page::Player(pp) = page {
+                        pp.set_play_mode(self.play_queue.mode());
+                        if pp.song().is_none() {
+                            if let Some(song) = self.play_queue.current() {
+                                pp.set_song(song.clone());
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -1398,5 +1492,54 @@ mod tests {
 
         assert_eq!(app.play_queue.current_index(), 1);
         assert_eq!(player_song_id(&app), Some(2));
+    }
+
+    #[tokio::test]
+    async fn add_many_to_queue_appends_all_songs() {
+        let mut app = App::new();
+
+        app.apply_action(PageAction::AddManyToQueue(vec![
+            make_song(1, "A"),
+            make_song(2, "B"),
+        ]))
+        .await;
+
+        assert_eq!(app.play_queue.len(), 2);
+        assert_eq!(app.play_queue.songs()[0].name, "A");
+        assert_eq!(app.play_queue.songs()[1].name, "B");
+    }
+
+    #[tokio::test]
+    async fn remove_queue_item_removes_without_changing_current_song() {
+        let mut app = App::new();
+        app.play_queue.load(vec![
+            make_song(1, "A"),
+            make_song(2, "B"),
+            make_song(3, "C"),
+        ]);
+
+        app.apply_action(PageAction::RemoveQueueItem(1)).await;
+
+        assert_eq!(app.play_queue.len(), 2);
+        assert_eq!(app.play_queue.current().unwrap().name, "A");
+        let names: Vec<&str> = app
+            .play_queue
+            .songs()
+            .iter()
+            .map(|song| song.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["A", "C"]);
+    }
+
+    #[tokio::test]
+    async fn clear_queue_empties_queue_and_player_page() {
+        let mut app = App::new();
+        app.play_queue.load(vec![make_song(1, "A")]);
+        app.update_player_page_for(make_song(1, "A"));
+
+        app.apply_action(PageAction::ClearQueue).await;
+
+        assert!(app.play_queue.is_empty());
+        assert_eq!(player_song_id(&app), None);
     }
 }

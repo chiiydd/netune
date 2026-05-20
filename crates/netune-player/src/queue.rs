@@ -49,6 +49,15 @@ impl PlayQueue {
     /// Append a single song to the end of the queue.
     pub fn push(&mut self, song: Song) {
         self.songs.push(song);
+        self.next_shuffle_idx = None;
+    }
+
+    /// Remove all songs and reset queue cursor state.
+    pub fn clear(&mut self) {
+        self.songs.clear();
+        self.current = 0;
+        self.history.clear();
+        self.next_shuffle_idx = None;
     }
 
     /// Remove the song at `index`. Returns the removed song if valid.
@@ -457,6 +466,33 @@ mod tests {
         let removed = q.remove(1).unwrap();
         assert_eq!(removed.name, "Song B");
         assert_eq!(q.current().unwrap().name, "Song C");
+    }
+
+    #[test]
+    fn test_queue_remove_current_last_moves_to_previous_song() {
+        let mut q = queue_with_three();
+        q.skip_to(2);
+
+        let removed = q.remove(2).unwrap();
+
+        assert_eq!(removed.name, "Song C");
+        assert_eq!(q.current_index(), 1);
+        assert_eq!(q.current().unwrap().name, "Song B");
+    }
+
+    #[test]
+    fn test_queue_clear_resets_state() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Shuffle);
+        q.skip_to(1);
+        assert!(q.peek_next().is_some());
+
+        q.clear();
+
+        assert!(q.is_empty());
+        assert_eq!(q.current_index(), 0);
+        assert!(q.current().is_none());
+        assert!(q.peek_next().is_none());
     }
 
     #[test]

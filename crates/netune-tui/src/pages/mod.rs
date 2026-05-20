@@ -51,6 +51,8 @@ pub enum PageAction {
     PlayQueueFrom(Vec<Song>, usize),
     /// Add a single song to the play queue without starting playback.
     AddToQueue(Song),
+    /// Add multiple songs to the play queue without starting playback.
+    AddManyToQueue(Vec<Song>),
     /// Fetch playlist detail tracks from API.
     FetchPlaylistDetail(u64),
     /// Fetch daily recommend songs from API.
@@ -65,6 +67,12 @@ pub enum PageAction {
     ToggleQueuePanel,
     /// Jump to a specific song in the queue by index.
     JumpToQueueItem(usize),
+    /// Remove a specific song from the queue by index.
+    RemoveQueueItem(usize),
+    /// Clear all songs from the queue.
+    ClearQueue,
+    /// Open the player page.
+    GoPlayer,
     /// Cycle play mode (Sequential → LoopAll → LoopOne → Shuffle).
     CyclePlayMode,
     /// Auto-advance to the next song when the current one finishes.

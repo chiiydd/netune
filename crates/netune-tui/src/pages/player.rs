@@ -92,6 +92,20 @@ impl PlayerPage {
         self.cover = None;
     }
 
+    pub fn clear_song(&mut self) {
+        self.song = None;
+        self.progress = 0.0;
+        self.elapsed = Duration::ZERO;
+        self.duration = Duration::ZERO;
+        self.is_playing = false;
+        self.loading = false;
+        self.marquee_tick = 0;
+        self.current_lyric_idx = 0;
+        self.lyrics = None;
+        self.playback_error = None;
+        self.cover = None;
+    }
+
     pub fn clear_lyrics(&mut self) {
         self.lyrics = None;
         self.playback_error = None;
