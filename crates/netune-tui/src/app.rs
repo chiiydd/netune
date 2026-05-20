@@ -79,6 +79,16 @@ struct PreCacheResult {
     cover_bytes: Option<Vec<u8>>,
 }
 
+/// Decision for how to handle a TogglePause action.
+enum ToggleAction {
+    /// Normal toggle — player has active state.
+    Toggle,
+    /// Song is loading — ignore the press.
+    Ignore,
+    /// State lost — replay the given song (or None if no current song).
+    Replay(Option<Song>),
+}
+
 pub struct App {
     /// Page navigation stack — last element is the active page.
     pub page_stack: Vec<Page>,
@@ -1095,16 +1105,53 @@ impl App {
 
             // ── Player controls ────────────────────────────────────────
             PageAction::TogglePause => {
-                if let Some(ref player) = self.player {
-                    player.toggle_pause();
+                // Determine what to do WITHOUT holding a borrow on self.player.
+                let toggle_action: Option<ToggleAction> = self.player.as_ref().map(|player| {
+                    if player.duration() > 0.0 {
+                        ToggleAction::Toggle
+                    } else if self.pending_play.is_some() {
+                        ToggleAction::Ignore
+                    } else {
+                        // No active state and no pending load — need recovery.
+                        let song = self.page_stack.iter().find_map(|page| {
+                            if let Page::Player(pp) = page {
+                                pp.song().cloned()
+                            } else {
+                                None
+                            }
+                        });
+                        ToggleAction::Replay(song)
+                    }
+                });
+
+                if let Some(action) = toggle_action {
+                    match action {
+                        ToggleAction::Toggle => {
+                            if let Some(ref player) = self.player {
+                                player.toggle_pause();
+                            }
+                        }
+                        ToggleAction::Ignore => {
+                            tracing::debug!("TogglePause ignored: song is loading");
+                        }
+                        ToggleAction::Replay(Some(song)) => {
+                            tracing::warn!("TogglePause with no active state, replaying current song");
+                            self.do_play_song(song).await;
+                        }
+                        ToggleAction::Replay(None) => {
+                            tracing::debug!("TogglePause: no current song to replay");
+                        }
+                    }
                     // Update UI immediately
-                    let playing = player.is_playing();
-                    let vol = (player.volume() * 100.0) as u16;
-                    for page in &mut self.page_stack {
-                        if let Page::Player(pp) = page {
-                            pp.update_from_player(player.position(), player.duration(), playing);
-                            pp.set_volume(vol);
-                            break;
+                    if let Some(ref player) = self.player {
+                        let playing = player.is_playing();
+                        let vol = (player.volume() * 100.0) as u16;
+                        for page in &mut self.page_stack {
+                            if let Page::Player(pp) = page {
+                                pp.update_from_player(player.position(), player.duration(), playing);
+                                pp.set_volume(vol);
+                                break;
+                            }
                         }
                     }
                 }
