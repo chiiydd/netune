@@ -165,17 +165,13 @@ impl NeteaseApiClient {
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
         let status = resp.status();
-        let body_bytes = resp
-            .bytes()
+        let body = resp
+            .text()
             .await
             .map_err(|e| ApiError::Message(e.to_string()))?;
-        tracing::debug!(status = %status, path = %api_path, body_len = body_bytes.len(), "API response");
-        serde_json::from_slice(&body_bytes)
-            .map_err(|e| {
-                let preview = &body_bytes[..body_bytes.len().min(200)];
-                let preview_str = String::from_utf8_lossy(preview);
-                ApiError::Message(format!("{e}: {preview_str}"))
-            })
+        tracing::debug!(status = %status, path = %api_path, body_len = body.len(), "API response");
+        serde_json::from_str(&body)
+            .map_err(|e| ApiError::Message(format!("{e}: {}", &body[..body.len().min(200)])))
     }
 
     /// Send a request, check the code, and extract the inner data.
