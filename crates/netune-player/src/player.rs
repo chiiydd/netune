@@ -122,18 +122,15 @@ impl AudioPlayer for NetunePlayer {
         // Increment generation to invalidate any previous threads.
         let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
-        // Read volume BEFORE stopping old playback.
-        let prev_volume = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
-
-        // Stop old playback (fast, just sets a flag).
+        // Read volume and stop old playback in a single lock acquisition.
+        let prev_volume;
         if let Ok(mut state) = self.state.lock() {
+            prev_volume = state.as_ref().map(|ps| ps.player.volume());
             if let Some(old) = state.take() {
                 old.player.stop();
             }
+        } else {
+            prev_volume = None;
         }
 
         let state_ref = Arc::clone(&self.state);
@@ -142,13 +139,13 @@ impl AudioPlayer for NetunePlayer {
         // Use spawn_blocking for heavy audio work — tasks are tied to the
         // tokio runtime so they get cancelled when superseded, preventing
         // orphaned threads from competing for the audio device.
-        let handle = tokio::task::spawn_blocking(move || {
+        let handle = tokio::task::spawn_blocking(move || -> Result<bool> {
             // EARLY CHECK: bail out before heavy work if superseded.
             // This prevents multiple tasks from competing for the audio device.
             if gen_ref.load(Ordering::SeqCst) != my_gen {
                 tracing::warn!(my_gen, current_gen = gen_ref.load(Ordering::SeqCst),
                     "Playback superseded before decode, discarding early");
-                return Ok(());
+                return Ok(false);
             }
 
             let cursor = Cursor::new(bytes);
@@ -163,7 +160,7 @@ impl AudioPlayer for NetunePlayer {
             // Check again before opening audio device (expensive operation).
             if gen_ref.load(Ordering::SeqCst) != my_gen {
                 tracing::debug!("Playback superseded before device open, discarding");
-                return Ok(());
+                return Ok(false);
             }
 
             // Retry device open — rapid song switching can leave the device
@@ -201,7 +198,8 @@ impl AudioPlayer for NetunePlayer {
             // Final check before writing state.
             if gen_ref.load(Ordering::SeqCst) != my_gen {
                 tracing::debug!("Playback superseded after append, discarding");
-                return Ok(());
+                rodio_player.stop();
+                return Ok(false);
             }
 
             let mut state = state_ref.lock().map_err(|e| {
@@ -210,7 +208,8 @@ impl AudioPlayer for NetunePlayer {
             // Double-check after acquiring lock.
             if gen_ref.load(Ordering::SeqCst) != my_gen {
                 tracing::debug!("Playback superseded after lock, discarding");
-                return Ok(());
+                rodio_player.stop();
+                return Ok(false);
             }
             *state = Some(PlaybackState {
                 _device_sink: device_sink,
@@ -219,12 +218,18 @@ impl AudioPlayer for NetunePlayer {
             });
 
             tracing::debug!(duration, "Playback started from cached bytes");
-            Ok(())
+            Ok(true)
         });
 
-        handle
+        let wrote_state = handle
             .await
-            .map_err(|e| NetuneError::Player(format!("Audio task failed: {e}")))?
+            .map_err(|e| NetuneError::Player(format!("Audio task failed: {e}")))?;
+        match wrote_state {
+            Ok(true) => {}
+            Ok(false) => return Err(NetuneError::Player("Playback superseded".into())),
+            Err(e) => return Err(e),
+        }
+        Ok(())
     }
 
     fn pause(&self) {
@@ -256,8 +261,8 @@ impl AudioPlayer for NetunePlayer {
     }
 
     fn stop(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut state) = self.state.lock() {
+            self.generation.fetch_add(1, Ordering::SeqCst);
             if let Some(ref ps) = *state {
                 ps.player.stop();
             }
