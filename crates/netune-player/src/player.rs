@@ -139,62 +139,71 @@ impl AudioPlayer for NetunePlayer {
         let state_ref = Arc::clone(&self.state);
         let gen_ref = Arc::clone(&self.generation);
 
-        // Use a dedicated thread for heavy audio work — never blocks tokio.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::Builder::new()
-            .name("audio-playback".into())
-            .spawn(move || {
-                let result = (|| -> std::result::Result<(), NetuneError> {
-                    let cursor = Cursor::new(bytes);
-                    let decoder = Decoder::new(cursor)
-                        .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
+        // Use spawn_blocking for heavy audio work — tasks are tied to the
+        // tokio runtime so they get cancelled when superseded, preventing
+        // orphaned threads from competing for the audio device.
+        let handle = tokio::task::spawn_blocking(move || {
+            // EARLY CHECK: bail out before heavy work if superseded.
+            // This prevents multiple tasks from competing for the audio device.
+            if gen_ref.load(Ordering::SeqCst) != my_gen {
+                tracing::debug!("Playback superseded before decode, discarding early");
+                return Ok(());
+            }
 
-                    let duration = decoder
-                        .total_duration()
-                        .map(|d| d.as_secs_f64())
-                        .unwrap_or(0.0);
+            let cursor = Cursor::new(bytes);
+            let decoder = Decoder::new(cursor)
+                .map_err(|e| NetuneError::Player(format!("Failed to decode audio: {e}")))?;
 
-                    let mut device_sink = DeviceSinkBuilder::open_default_sink()
-                        .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
-                    device_sink.log_on_drop(false);
+            let duration = decoder
+                .total_duration()
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
 
-                    let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
+            // Check again before opening audio device (expensive operation).
+            if gen_ref.load(Ordering::SeqCst) != my_gen {
+                tracing::debug!("Playback superseded before device open, discarding");
+                return Ok(());
+            }
 
-                    if let Some(vol) = prev_volume {
-                        rodio_player.set_volume(vol);
-                    }
+            let mut device_sink = DeviceSinkBuilder::open_default_sink()
+                .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
+            device_sink.log_on_drop(false);
 
-                    rodio_player.append(decoder);
+            let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
 
-                    // Check: has a newer play been requested or stop called?
-                    if gen_ref.load(Ordering::SeqCst) != my_gen {
-                        tracing::debug!("Playback superseded by newer request, discarding");
-                        return Ok(());
-                    }
+            if let Some(vol) = prev_volume {
+                rodio_player.set_volume(vol);
+            }
 
-                    let mut state = state_ref.lock().map_err(|e| {
-                        NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
-                    })?;
-                    // Double-check after acquiring lock.
-                    if gen_ref.load(Ordering::SeqCst) != my_gen {
-                        tracing::debug!("Playback superseded after lock, discarding");
-                        return Ok(());
-                    }
-                    *state = Some(PlaybackState {
-                        _device_sink: device_sink,
-                        player: rodio_player,
-                        duration,
-                    });
+            rodio_player.append(decoder);
 
-                    tracing::debug!(duration, "Playback started from cached bytes");
-                    Ok(())
-                })();
-                let _ = tx.send(result);
-            })
-            .map_err(|e| NetuneError::Player(format!("Failed to spawn audio thread: {e}")))?;
+            // Final check before writing state.
+            if gen_ref.load(Ordering::SeqCst) != my_gen {
+                tracing::debug!("Playback superseded after append, discarding");
+                return Ok(());
+            }
 
-        rx.await
-            .map_err(|e| NetuneError::Player(format!("Audio thread channel error: {e}")))?
+            let mut state = state_ref.lock().map_err(|e| {
+                NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
+            })?;
+            // Double-check after acquiring lock.
+            if gen_ref.load(Ordering::SeqCst) != my_gen {
+                tracing::debug!("Playback superseded after lock, discarding");
+                return Ok(());
+            }
+            *state = Some(PlaybackState {
+                _device_sink: device_sink,
+                player: rodio_player,
+                duration,
+            });
+
+            tracing::debug!(duration, "Playback started from cached bytes");
+            Ok(())
+        });
+
+        handle
+            .await
+            .map_err(|e| NetuneError::Player(format!("Audio task failed: {e}")))?
     }
 
     fn pause(&self) {
