@@ -144,6 +144,14 @@ impl PlayerPage {
         self.song.as_ref()
     }
 
+    pub fn picker(&self) -> &Picker {
+        &self.picker
+    }
+
+    pub fn set_cover(&mut self, protocol: Protocol) {
+        self.cover = Some(protocol);
+    }
+
     // ── Rendering ───────────────────────────────────────────────────────────
 
     pub fn render(&self, f: &mut Frame, area: Rect) {

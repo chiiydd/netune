@@ -67,8 +67,8 @@ struct PendingPlayResult {
     /// Audio bytes — `None` when we already played from cache (cache hit).
     audio_bytes: Option<Vec<u8>>,
     lyrics: Option<Lyrics>,
-    /// Downloaded album cover image bytes (if available).
-    cover_bytes: Option<Vec<u8>>,
+    /// Decoded cover image protocol (if available).
+    cover_protocol: Option<ratatui_image::protocol::Protocol>,
 }
 
 /// Result of a background pre-cache task (audio + lyrics + cover).
@@ -170,6 +170,13 @@ impl App {
         let song_id = song.id;
         let cover_url = song.album.cover_url.clone();
         let cache_dir = self.audio_cache.dir().clone();
+        let picker = self.page_stack.iter().find_map(|page| {
+            if let Page::Player(pp) = page {
+                Some(pp.picker().clone())
+            } else {
+                None
+            }
+        });
 
         // Spawn background task — do_play_song returns IMMEDIATELY.
         self.pending_play = Some(tokio::spawn(async move {
@@ -244,12 +251,34 @@ impl App {
                 }
             };
 
+            // Cache cover bytes to disk for future plays.
+            if let Some(ref bytes) = cover {
+                let cover_path = cache_dir.join(format!("{song_id}.cover"));
+                let _ = tokio::fs::write(&cover_path, bytes).await;
+            }
+
+            // Decode cover image in the background task so the event loop
+            // isn't blocked by CPU-intensive image processing.
+            let cover_protocol = cover.and_then(|bytes| {
+                use ratatui::layout::Size;
+                use ratatui_image::Resize;
+                let picker = picker?;
+                let t = std::time::Instant::now();
+                let img = image::load_from_memory(&bytes).ok()?;
+                let size = Size::new(8, 6);
+                let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
+                if protocol.is_some() {
+                    tracing::info!(ms = t.elapsed().as_millis(), "Cover decoded in background task");
+                }
+                protocol
+            });
+
             PendingPlayResult {
                 song_id,
                 _song: song,
                 audio_bytes: audio_for_cache,
                 lyrics,
-                cover_bytes: cover,
+                cover_protocol,
             }
         }));
     }
@@ -304,19 +333,16 @@ impl App {
                     }
                 }
 
-                // Apply cover art (and cache it).
-                if let Some(ref cover_bytes) = result.cover_bytes {
-                    tracing::debug!(size = cover_bytes.len(), "Applying cover art to player");
-                    self.audio_cache.put_cover(result.song_id, cover_bytes).await;
-                    let cover_bytes = cover_bytes.clone();
+                // Apply cover art (already decoded in background task).
+                if let Some(protocol) = result.cover_protocol {
                     for page in &mut self.page_stack {
                         if let Page::Player(pp) = page {
-                            pp.set_cover_bytes(&cover_bytes);
+                            pp.set_cover(protocol);
                             break;
                         }
                     }
                 } else {
-                    tracing::debug!("No cover bytes available");
+                    tracing::debug!("No cover available");
                 }
 
                 // Clear loading state.
