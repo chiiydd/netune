@@ -92,7 +92,10 @@ impl NeteaseApiClient {
                 *self.login_state.write().await = LoginState::LoggedIn(profile.clone());
                 Ok(Some(profile))
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                tracing::warn!(error = %e, "Auto-login check failed");
+                Ok(None)
+            }
         }
     }
 
