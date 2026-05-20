@@ -38,6 +38,7 @@ pub struct PlayerPage {
     is_playing: bool,
     loading: bool,
     loading_tick: usize,
+    marquee_tick: usize,
     lyrics: Option<Lyrics>,
     playback_error: Option<String>,
     current_lyric_idx: usize,
@@ -66,6 +67,7 @@ impl PlayerPage {
             is_playing: false,
             loading: false,
             loading_tick: 0,
+            marquee_tick: 0,
             lyrics: None,
             playback_error: None,
             current_lyric_idx: 0,
@@ -82,6 +84,7 @@ impl PlayerPage {
         self.progress = 0.0;
         self.elapsed = Duration::ZERO;
         self.is_playing = true;
+        self.marquee_tick = 0;
         self.current_lyric_idx = 0;
         self.lyrics = None;
         self.playback_error = None;
@@ -216,10 +219,7 @@ impl PlayerPage {
         let box_total_w = (box_w + 2) as u16; // │ + inner + │
         let box_x = area.x + area.width.saturating_sub(box_total_w) / 2;
 
-        // Calculate centered layout: cover(8) + gap(2) + info as a unit
-        let cover_w = 8usize;
-        let gap = 2usize;
-        let max_info_w = [
+        let raw_max_info_w = [
             display_width(&title),
             display_width(&artists),
             display_width(&album),
@@ -228,10 +228,9 @@ impl PlayerPage {
         .max()
         .copied()
         .unwrap_or(0);
-        let unit_w = cover_w + gap + max_info_w;
-        let info_left_pad = box_w.saturating_sub(unit_w) / 2;
+        let metadata_layout = metadata_layout(box_w, raw_max_info_w, self.cover.is_some());
         // cover_x is where the cover overlay should be drawn (inside the box)
-        let cover_overlay_x = box_x + 1 + info_left_pad as u16;
+        let cover_overlay_x = box_x + 1 + metadata_layout.left_pad as u16;
 
         let mut lines: Vec<Line> = Vec::with_capacity(14);
 
@@ -271,12 +270,14 @@ impl PlayerPage {
             if self.cover.is_some() {
                 // Position info to the right of cover with gap, centered as unit
                 for (text, style) in &info_texts {
-                    let text_w = display_width(text);
-                    let right_pad = box_w.saturating_sub(info_left_pad + cover_w + gap + text_w);
+                    let fitted = marquee_text(text, metadata_layout.info_width, self.marquee_tick);
+                    let text_w = display_width(&fitted);
+                    let text_start = metadata_layout.text_start();
+                    let right_pad = box_w.saturating_sub(text_start + text_w);
                     lines.push(Line::from(vec![
                         Span::styled("│", Style::default().fg(bc)),
-                        Span::styled(" ".repeat(info_left_pad + cover_w + gap), Style::default()),
-                        Span::styled(text.to_string(), *style),
+                        Span::styled(" ".repeat(text_start), Style::default()),
+                        Span::styled(fitted, *style),
                         Span::styled(" ".repeat(right_pad), Style::default()),
                         Span::styled("│", Style::default().fg(bc)),
                     ]));
@@ -284,7 +285,16 @@ impl PlayerPage {
             } else {
                 // No cover — center text normally
                 for (text, style) in &info_texts {
-                    lines.push(self.make_boxed_line(text, *style, bc, box_w));
+                    let fitted = marquee_text(text, metadata_layout.info_width, self.marquee_tick);
+                    let text_w = display_width(&fitted);
+                    let right_pad = box_w.saturating_sub(metadata_layout.left_pad + text_w);
+                    lines.push(Line::from(vec![
+                        Span::styled("│", Style::default().fg(bc)),
+                        Span::styled(" ".repeat(metadata_layout.left_pad), Style::default()),
+                        Span::styled(fitted, *style),
+                        Span::styled(" ".repeat(right_pad), Style::default()),
+                        Span::styled("│", Style::default().fg(bc)),
+                    ]));
                 }
             }
 
@@ -563,6 +573,9 @@ impl PlayerPage {
         if self.loading {
             self.loading_tick = self.loading_tick.wrapping_add(1);
         }
+        if self.song.is_some() {
+            self.marquee_tick = self.marquee_tick.wrapping_add(1);
+        }
         if !self.is_playing {
             return;
         }
@@ -648,4 +661,148 @@ fn format_duration(d: Duration) -> String {
 
 fn display_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MetadataLayout {
+    left_pad: usize,
+    info_width: usize,
+    cover_width: usize,
+    gap: usize,
+    has_cover: bool,
+}
+
+impl MetadataLayout {
+    fn text_start(self) -> usize {
+        self.left_pad
+            + if self.has_cover {
+                self.cover_width + self.gap
+            } else {
+                0
+            }
+    }
+}
+
+fn metadata_layout(box_w: usize, raw_info_w: usize, has_cover: bool) -> MetadataLayout {
+    const SIDE_PAD: usize = 2;
+    const COVER_WIDTH: usize = 8;
+    const COVER_INFO_GAP: usize = 3;
+
+    let side_pad = SIDE_PAD.min(box_w / 2);
+    let content_w = box_w.saturating_sub(side_pad * 2);
+
+    if has_cover {
+        let info_width = raw_info_w.min(content_w.saturating_sub(COVER_WIDTH + COVER_INFO_GAP));
+        let unit_w = COVER_WIDTH + COVER_INFO_GAP + info_width;
+        return MetadataLayout {
+            left_pad: side_pad + content_w.saturating_sub(unit_w) / 2,
+            info_width,
+            cover_width: COVER_WIDTH,
+            gap: COVER_INFO_GAP,
+            has_cover,
+        };
+    }
+
+    let info_width = raw_info_w.min(content_w);
+    MetadataLayout {
+        left_pad: side_pad + content_w.saturating_sub(info_width) / 2,
+        info_width,
+        cover_width: 0,
+        gap: 0,
+        has_cover,
+    }
+}
+
+fn marquee_text(text: &str, width: usize, tick: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if display_width(text) <= width {
+        return text.to_string();
+    }
+
+    let source = format!("{text}   ");
+    let chars: Vec<char> = source.chars().collect();
+    let offset = (tick / 3) % chars.len();
+    let mut out = String::new();
+    let mut used = 0usize;
+
+    for i in 0..chars.len() {
+        let ch = chars[(offset + i) % chars.len()];
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if ch_width == 0 {
+            out.push(ch);
+            continue;
+        }
+        if used + ch_width > width {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marquee_keeps_short_text_unchanged() {
+        assert_eq!(marquee_text("Short title", 20, 0), "Short title");
+    }
+
+    #[test]
+    fn marquee_never_exceeds_target_width() {
+        let text = "This is a very long song title that should stay inside the player box";
+
+        for tick in 0..40 {
+            let rendered = marquee_text(text, 18, tick);
+            assert!(
+                display_width(&rendered) <= 18,
+                "rendered text exceeded width at tick {tick}: {rendered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn marquee_scrolls_long_text_over_time() {
+        let text = "This is a very long song title";
+
+        assert_ne!(marquee_text(text, 12, 0), marquee_text(text, 12, 6));
+    }
+
+    #[test]
+    fn marquee_handles_wide_characters_without_overflow() {
+        let text = "飞跃经济舱 (LIVE版) - 很长很长的现场版本标题";
+
+        for tick in 0..40 {
+            let rendered = marquee_text(text, 15, tick);
+            assert!(
+                display_width(&rendered) <= 15,
+                "wide text exceeded width at tick {tick}: {rendered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_layout_reserves_side_space_with_cover_for_long_text() {
+        let layout = metadata_layout(48, 80, true);
+
+        assert!(layout.left_pad >= 2);
+        assert_eq!(layout.gap, 3);
+        assert_eq!(layout.info_width, 33);
+        assert_eq!(layout.text_start(), 13);
+        assert!(48usize.saturating_sub(layout.text_start() + layout.info_width) >= 2);
+    }
+
+    #[test]
+    fn metadata_layout_reserves_side_space_without_cover_for_long_text() {
+        let layout = metadata_layout(48, 80, false);
+
+        assert_eq!(layout.left_pad, 2);
+        assert_eq!(layout.info_width, 44);
+        assert!(48usize.saturating_sub(layout.left_pad + layout.info_width) >= 2);
+    }
 }

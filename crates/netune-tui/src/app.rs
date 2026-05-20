@@ -116,6 +116,8 @@ pub struct App {
     pending_search: Option<tokio::task::JoinHandle<netune_core::Result<SearchResult>>>,
     /// Background task for pre-caching next song (audio + lyrics + cover).
     pending_precache: Option<tokio::task::JoinHandle<Option<PreCacheResult>>>,
+    /// Animation tick for app chrome such as statusline marquee text.
+    statusline_tick: usize,
 }
 
 impl App {
@@ -133,6 +135,7 @@ impl App {
             pending_play: None,
             pending_search: None,
             pending_precache: None,
+            statusline_tick: 0,
         }
     }
 
@@ -713,6 +716,7 @@ impl App {
     // ── Tick ────────────────────────────────────────────────────────────
 
     fn tick(&mut self) -> PageAction {
+        self.statusline_tick = self.statusline_tick.wrapping_add(1);
         self.sync_player_state();
 
         // Auto-advance: when the current song finishes, play the next one.
@@ -800,7 +804,15 @@ impl App {
                     let (mode, mode_color) = page.mode();
                     let context = page.context();
                     let hints = page.hints();
-                    chrome::render_statusline(f, chunks[2], &mode, mode_color, context, &hints);
+                    chrome::render_statusline(
+                        f,
+                        chunks[2],
+                        &mode,
+                        mode_color,
+                        context,
+                        self.statusline_tick,
+                        &hints,
+                    );
 
                     // Render queue panel overlay on top if open.
                     if let Some(ref qp) = self.queue_panel {
