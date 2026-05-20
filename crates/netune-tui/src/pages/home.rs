@@ -280,7 +280,7 @@ impl HomePage {
             MenuAction::Search => PageAction::Push(super::Page::Search(super::SearchPage::new())),
             MenuAction::DailyRecommend => PageAction::FetchDailyRecommend,
             MenuAction::Login => PageAction::Push(super::Page::Login(super::LoginPage::new())),
-            MenuAction::Logout => PageAction::Pop,
+            MenuAction::Logout => PageAction::Logout,
             MenuAction::Settings => {
                 PageAction::Push(super::Page::Settings(super::SettingsPage::new()))
             }

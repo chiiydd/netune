@@ -36,6 +36,30 @@ fn queue_file_path() -> std::path::PathBuf {
         .join("queue.json")
 }
 
+/// Path to the persisted user profile (~/.netune/user.json).
+fn profile_file_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".netune")
+        .join("user.json")
+}
+
+fn save_profile(profile: &netune_core::models::UserProfile) {
+    let path = profile_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(profile) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn load_profile() -> Option<netune_core::models::UserProfile> {
+    let path = profile_file_path();
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 /// Result of a background song-loading task.
 struct PendingPlayResult {
     song_id: u64,
@@ -610,33 +634,29 @@ impl App {
     where
         B::Error: Send + Sync + 'static,
     {
-        // Auto-login from saved cookies.
+        // Auto-login from saved profile + cookies.
         {
             let cookie_path = dirs::home_dir()
                 .unwrap_or_default()
                 .join(".netune")
                 .join("cookies.txt");
+
             if cookie_path.exists() {
                 if let Some(ref client) = self.api_client {
-                    if client.load_cookies(&cookie_path).unwrap_or(false) {
-                        match client.check_login().await {
-                            Ok(Some(profile)) => {
-                                tracing::info!(nickname = %profile.nickname, "Auto-login from saved cookies");
-                                self.user = Some(profile.clone());
-                                for page in &mut self.page_stack {
-                                    if let Page::Home(hp) = page {
-                                        hp.set_user(Some(profile));
-                                        break;
-                                    }
-                                }
-                                self.fetch_user_playlists().await;
-                            }
-                            _ => {
-                                tracing::info!("Saved cookies invalid, need re-login");
-                            }
-                        }
+                    let _ = client.load_cookies(&cookie_path);
+                }
+            }
+
+            if let Some(profile) = load_profile() {
+                tracing::info!(nickname = %profile.nickname, "Auto-login from saved profile");
+                self.user = Some(profile.clone());
+                for page in &mut self.page_stack {
+                    if let Page::Home(hp) = page {
+                        hp.set_user(Some(profile));
+                        break;
                     }
                 }
+                self.fetch_user_playlists().await;
             }
         }
 
@@ -807,6 +827,17 @@ impl App {
                     self.should_quit = true;
                 }
             }
+            PageAction::Logout => {
+                let _ = std::fs::remove_file(profile_file_path());
+                self.user = None;
+                for page in &mut self.page_stack {
+                    if let Page::Home(hp) = page {
+                        hp.set_user(None);
+                        break;
+                    }
+                }
+                self.page_stack.push(Page::Login(crate::pages::login::LoginPage::new()));
+            }
             PageAction::Replace(page) => {
                 if let Some(top) = self.page_stack.last_mut() {
                     *top = page;
@@ -842,6 +873,7 @@ impl App {
                         if let Err(e) = client.save_cookies(&cookie_path) {
                             tracing::warn!(error = %e, "Failed to save cookies");
                         }
+                        save_profile(&profile);
                         // Navigate to home and update user info.
                         self.page_stack.clear();
                         let mut home = crate::pages::home::HomePage::new();
@@ -902,6 +934,7 @@ impl App {
                                 tracing::warn!(error = %e, "Failed to save cookies");
                             }
                         }
+                        save_profile(&profile);
                         // Navigate to home and update user info.
                         self.page_stack.clear();
                         let mut home = crate::pages::home::HomePage::new();

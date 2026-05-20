@@ -73,6 +73,8 @@ pub enum PageAction {
     PlayPrev,
     /// Switch the color theme.
     SetTheme(String),
+    /// Logout: clear saved credentials and exit.
+    Logout,
 }
 
 /// Settings page focus fields.
