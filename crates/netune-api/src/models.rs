@@ -101,11 +101,11 @@ pub struct ApiPlaylist {
 pub struct ApiTrack {
     pub id: u64,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, alias = "artists")]
     pub ar: Vec<ApiArtist>,
-    #[serde(default)]
+    #[serde(default, alias = "album")]
     pub al: Option<ApiAlbum>,
-    #[serde(default)]
+    #[serde(default, alias = "duration")]
     pub dt: u64,
 }
 
@@ -351,6 +351,33 @@ mod tests {
         assert_eq!(result.song_count, 1);
         assert_eq!(result.songs.len(), 1);
         assert_eq!(result.songs[0].name, "Found Song");
+    }
+
+    #[test]
+    fn test_api_search_response_legacy_song_fields() {
+        let json = r#"{
+            "code": 200,
+            "result": {
+                "songs": [
+                    {
+                        "id": 509781655,
+                        "name": "想你就写信 (Live)",
+                        "artists": [{"id": 6452, "name": "周杰伦"}],
+                        "album": {"id": 36412633, "name": "中国新歌声第二季 第13期", "picUrl": "https://example.com/cover.jpg"},
+                        "duration": 238698
+                    }
+                ],
+                "songCount": 1
+            }
+        }"#;
+
+        let resp: ApiSearchResponse = serde_json::from_str(json).unwrap();
+        let song = &resp.result.unwrap().songs[0];
+
+        assert_eq!(song.ar.len(), 1);
+        assert_eq!(song.ar[0].name, "周杰伦");
+        assert_eq!(song.al.as_ref().unwrap().name, "中国新歌声第二季 第13期");
+        assert_eq!(song.dt, 238698);
     }
 
     #[test]

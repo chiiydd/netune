@@ -55,6 +55,10 @@ impl NeteaseApiClient {
         }
     }
 
+    fn search_path() -> &'static str {
+        "/api/search/get/web"
+    }
+
     /// Save cookies to a file for persistence across sessions.
     pub fn save_cookies(&self, path: &std::path::Path) -> Result<()> {
         let url: reqwest::Url = self
@@ -397,7 +401,7 @@ impl NeteaseClient for NeteaseApiClient {
     }
 
     async fn search_songs(&self, keyword: &str, page: u32, size: u32) -> Result<SearchResult> {
-        let path = "/weapi/cloudsearch/get/web";
+        let path = Self::search_path();
         let offset = page * size;
         let params = serde_json::json!({
             "s": keyword,
@@ -674,6 +678,11 @@ mod tests {
         let client = NeteaseApiClient::new();
         // Verify the client is created with default state
         assert!(matches!(client.login_state(), LoginState::LoggedOut));
+    }
+
+    #[test]
+    fn test_search_uses_available_plain_endpoint() {
+        assert_eq!(NeteaseApiClient::search_path(), "/api/search/get/web");
     }
 
     #[test]
