@@ -73,13 +73,8 @@ impl DiskAudioCache {
 
     /// Get cached audio bytes for a song.
     /// Uses async I/O to avoid blocking the tokio runtime on large file reads.
-    pub async fn get(&mut self, song_id: u64) -> Option<Vec<u8>> {
-        let path = {
-            let entry = self.index.get_mut(&song_id)?;
-            entry.accessed = SystemTime::now();
-            entry.path.clone()
-        };
-        // Use the index's SystemTime for LRU — no need for filetime::set_file_mtime.
+    pub async fn get(&self, song_id: u64) -> Option<Vec<u8>> {
+        let path = self.index.get(&song_id)?.path.clone();
         tokio::fs::read(&path).await.ok()
     }
 
@@ -112,7 +107,7 @@ impl DiskAudioCache {
     }
 
     /// Get cached lyrics JSON for a song.
-    pub async fn get_lyrics(&mut self, song_id: u64) -> Option<Vec<u8>> {
+    pub async fn get_lyrics(&self, song_id: u64) -> Option<Vec<u8>> {
         let path = self.dir.join(format!("{song_id}.lrc"));
         tokio::fs::read(&path).await.ok()
     }
@@ -126,7 +121,7 @@ impl DiskAudioCache {
     }
 
     /// Get cached cover image bytes for a song.
-    pub async fn get_cover(&mut self, song_id: u64) -> Option<Vec<u8>> {
+    pub async fn get_cover(&self, song_id: u64) -> Option<Vec<u8>> {
         let path = self.dir.join(format!("{song_id}.cover"));
         tokio::fs::read(&path).await.ok()
     }
@@ -190,7 +185,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache_get_miss() {
         let dir = tempfile::tempdir().unwrap();
-        let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
+        let cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), DEFAULT_MAX_CACHE_BYTES);
         assert_eq!(cache.get(42).await, None);
     }
 
@@ -222,12 +217,11 @@ mod tests {
         let mut cache = DiskAudioCache::with_dir(dir.path().to_path_buf(), 10);
         cache.put(1, b"aaaaa").await;
         cache.put(2, b"bbbbb").await;
-        // Access song 1 so it becomes recently used.
-        cache.get(1).await;
-        // Now put song 3 — song 2 should be evicted (least recently used).
+        // Put song 3 — song 1 should be evicted (oldest by write time).
+        // Note: get() no longer refreshes access time; LRU is based on writes only.
         cache.put(3, b"ccccc").await;
-        assert!(cache.contains(1));
-        assert!(!cache.contains(2));
+        assert!(!cache.contains(1));
+        assert!(cache.contains(2));
         assert!(cache.contains(3));
     }
 

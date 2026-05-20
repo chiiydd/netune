@@ -155,8 +155,12 @@ impl App {
             // Playback started — clear loading indicator.
             self.set_player_loading(false);
 
-            // Try to load cached lyrics.
-            let cached_lyrics = self.audio_cache.get_lyrics(song.id).await;
+            // Load lyrics and cover in parallel from disk cache.
+            let (cached_lyrics, cached_cover) = tokio::join!(
+                self.audio_cache.get_lyrics(song.id),
+                self.audio_cache.get_cover(song.id),
+            );
+
             if let Some(ref lyrics_bytes) = cached_lyrics {
                 match serde_json::from_slice::<Lyrics>(lyrics_bytes) {
                     Ok(lyrics) => {
@@ -173,9 +177,6 @@ impl App {
                     }
                 }
             }
-
-            // Try to load cached cover.
-            let cached_cover = self.audio_cache.get_cover(song.id).await;
             if let Some(ref cover_bytes) = cached_cover {
                 tracing::info!(song_id = song.id, size = cover_bytes.len(), "Applying cached cover");
                 for page in &mut self.page_stack {

@@ -38,7 +38,7 @@ fn bench_cache_get_1mb(c: &mut Criterion) {
                 rt.block_on(cache.put(1, &data));
                 (cache, dir)
             },
-            |(mut cache, _dir)| {
+            |(cache, _dir)| {
                 let _bytes = rt.block_on(cache.get(black_box(1)));
             },
             criterion::BatchSize::SmallInput,
@@ -79,7 +79,7 @@ fn bench_cache_get_5mb(c: &mut Criterion) {
                 rt.block_on(cache.put(2, &data));
                 (cache, dir)
             },
-            |(mut cache, _dir)| {
+            |(cache, _dir)| {
                 let _bytes = rt.block_on(cache.get(black_box(2)));
             },
             criterion::BatchSize::SmallInput,
