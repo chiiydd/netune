@@ -6,7 +6,7 @@
 //! control) and feeds results back into the appropriate pages.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -269,6 +269,7 @@ impl App {
         };
         match handle.await {
             Ok(result) => {
+                let t_process = Instant::now();
                 // Check if the current player page is still showing this song.
                 let current_song_id = self.page_stack.iter().find_map(|page| {
                     if let Page::Player(pp) = page {
@@ -324,7 +325,7 @@ impl App {
                 // Trigger background pre-cache for the next song.
                 self.pre_cache_next();
 
-                tracing::info!("Now playing");
+                tracing::info!(ms = t_process.elapsed().as_millis(), "poll_pending_play processed");
             }
             Err(e) => {
                 if e.is_cancelled() {
@@ -674,6 +675,7 @@ impl App {
         }
 
         loop {
+            let t_draw = Instant::now();
             terminal.draw(|f| {
                 if let Some(page) = self.page_stack.last_mut() {
                     let area = f.area();
@@ -704,8 +706,10 @@ impl App {
                     }
                 }
             })?;
+            let draw_ms = t_draw.elapsed().as_millis();
 
             if !event::poll(Duration::from_millis(100))? {
+                let t_idle = Instant::now();
                 let tick_action = self.tick();
                 if !matches!(tick_action, PageAction::None) {
                     self.apply_action(tick_action).await;
@@ -713,10 +717,16 @@ impl App {
                 self.poll_pending_play().await;
                 self.poll_pending_search().await;
                 self.poll_pending_precache().await;
+                let idle_ms = t_idle.elapsed().as_millis();
+                if draw_ms > 16 || idle_ms > 16 {
+                    tracing::warn!(draw_ms, idle_ms, "Slow frame (idle)");
+                }
                 continue;
             }
 
+            let t_read = Instant::now();
             let evt = event::read()?;
+            let read_ms = t_read.elapsed().as_millis();
 
             if let Event::Key(k) = &evt {
                 if k.kind == KeyEventKind::Press {
@@ -763,10 +773,19 @@ impl App {
                 PageAction::None
             };
 
+            let t_apply = Instant::now();
             self.apply_action(action).await;
+            let apply_ms = t_apply.elapsed().as_millis();
+
+            let t_poll = Instant::now();
             self.poll_pending_play().await;
             self.poll_pending_search().await;
             self.poll_pending_precache().await;
+            let poll_ms = t_poll.elapsed().as_millis();
+
+            if draw_ms > 16 || read_ms > 16 || apply_ms > 16 || poll_ms > 16 {
+                tracing::warn!(draw_ms, read_ms, apply_ms, poll_ms, "Slow frame (event)");
+            }
 
             if self.should_quit {
                 break;

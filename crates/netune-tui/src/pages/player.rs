@@ -119,6 +119,7 @@ impl PlayerPage {
 
     /// Set album cover from raw image bytes (called after async download).
     pub fn set_cover_bytes(&mut self, bytes: &[u8]) {
+        let t = std::time::Instant::now();
         tracing::debug!(size = bytes.len(), "Decoding cover image");
         let Ok(img) = image::load_from_memory(bytes) else {
             tracing::warn!("Failed to decode cover image");
@@ -136,6 +137,7 @@ impl PlayerPage {
                 tracing::warn!(error = %e, "Failed to create image protocol");
             }
         }
+        tracing::info!(ms = t.elapsed().as_millis(), "Cover decoded");
     }
 
     pub fn song(&self) -> Option<&Song> {
