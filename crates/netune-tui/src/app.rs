@@ -64,6 +64,7 @@ fn load_profile() -> Option<netune_core::models::UserProfile> {
 struct PendingPlayResult {
     song_id: u64,
     _song: Song,
+    playback_error: Option<String>,
     /// Audio bytes — `None` when we already played from cache (cache hit).
     audio_bytes: Option<Vec<u8>>,
     lyrics: Option<Lyrics>,
@@ -207,6 +208,7 @@ impl App {
 
             // ── Prepare audio bytes (download if cache miss) ──
             let mut audio_for_cache = None;
+            let mut playback_error = None;
             let audio_bytes: Option<Vec<u8>> = if let Some(bytes) = cached_audio {
                 tracing::info!(song_id, "Playing from audio cache");
                 Some(bytes)
@@ -221,16 +223,19 @@ impl App {
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "Failed to read audio body");
+                                playback_error = Some(format!("failed to read audio body: {e}"));
                                 None
                             }
                         },
                         Err(e) => {
                             tracing::warn!(error = %e, "Failed to download audio");
+                            playback_error = Some(format!("failed to download audio: {e}"));
                             None
                         }
                     },
                     Err(e) => {
                         tracing::warn!(error = %e, song_id, "Failed to get song URL");
+                        playback_error = Some(e.to_string());
                         None
                     }
                 }
@@ -241,10 +246,15 @@ impl App {
                 if let Some(ref bytes) = audio_bytes {
                     if let Err(e) = p.play_from_bytes(bytes.clone()).await {
                         tracing::warn!(error = %e, "Playback failed");
+                        playback_error = Some(e.to_string());
                     } else {
                         p.set_volume(volume);
                     }
+                } else if playback_error.is_none() {
+                    playback_error = Some("no audio bytes available".to_string());
                 }
+            } else {
+                playback_error = Some("no audio player available".to_string());
             }
 
             // ── Fetch lyrics and cover in PARALLEL (non-critical) ──
@@ -259,12 +269,10 @@ impl App {
                 let cover_bytes = match cached_cover {
                     Some(bytes) => Some(bytes),
                     None => match cover_url {
-                        Some(ref url) => {
-                            match client.http_client().get(url).send().await {
-                                Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
-                                Err(_) => None,
-                            }
-                        }
+                        Some(ref url) => match client.http_client().get(url).send().await {
+                            Ok(resp) => resp.bytes().await.ok().map(|b| b.to_vec()),
+                            Err(_) => None,
+                        },
                         None => None,
                     },
                 };
@@ -290,10 +298,15 @@ impl App {
                         let size = Size::new(8, 6);
                         let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
                         if protocol.is_some() {
-                            tracing::info!(ms = t.elapsed().as_millis(), "Cover decoded in blocking thread");
+                            tracing::info!(
+                                ms = t.elapsed().as_millis(),
+                                "Cover decoded in blocking thread"
+                            );
                         }
                         protocol
-                    }).await {
+                    })
+                    .await
+                    {
                         Ok(protocol) => protocol,
                         Err(e) => {
                             tracing::warn!(error = %e, "Cover decode task failed");
@@ -307,6 +320,7 @@ impl App {
             PendingPlayResult {
                 song_id,
                 _song: song,
+                playback_error,
                 audio_bytes: audio_for_cache,
                 lyrics,
                 cover_protocol,
@@ -340,6 +354,30 @@ impl App {
                 });
                 if current_song_id != Some(result.song_id) {
                     tracing::info!(expected = result.song_id, actual = ?current_song_id, "Stale play result, skipping");
+                    return;
+                }
+
+                if let Some(error) = result.playback_error {
+                    tracing::warn!(
+                        song_id = result.song_id,
+                        error = %error,
+                        "Playback failed for current song"
+                    );
+                    self.set_player_loading(false);
+                    let should_try_next = self
+                        .play_queue
+                        .peek_next()
+                        .is_some_and(|song| song.id != result.song_id);
+                    if should_try_next {
+                        self.do_play_next().await;
+                    } else {
+                        for page in &mut self.page_stack {
+                            if let Page::Player(pp) = page {
+                                pp.set_playback_error(error);
+                                break;
+                            }
+                        }
+                    }
                     return;
                 }
 
@@ -382,7 +420,10 @@ impl App {
                 // Trigger background pre-cache for the next song.
                 self.pre_cache_next();
 
-                tracing::info!(ms = t_process.elapsed().as_millis(), "poll_pending_play processed");
+                tracing::info!(
+                    ms = t_process.elapsed().as_millis(),
+                    "poll_pending_play processed"
+                );
             }
             Err(e) => {
                 if e.is_cancelled() {
@@ -509,7 +550,9 @@ impl App {
             };
 
             let lyrics = lyrics_result
-                .map_err(|e| tracing::warn!(error = %e, song_id, "Pre-cache: failed to fetch lyrics"))
+                .map_err(
+                    |e| tracing::warn!(error = %e, song_id, "Pre-cache: failed to fetch lyrics"),
+                )
                 .ok();
 
             tracing::info!(
@@ -541,14 +584,18 @@ impl App {
         };
         match handle.await {
             Ok(Some(result)) => {
-                self.audio_cache.put(result.song_id, &result.audio_bytes).await;
+                self.audio_cache
+                    .put(result.song_id, &result.audio_bytes)
+                    .await;
                 if let Some(ref lyrics) = result.lyrics {
                     if let Ok(json) = serde_json::to_vec(lyrics) {
                         self.audio_cache.put_lyrics(result.song_id, &json).await;
                     }
                 }
                 if let Some(ref cover_bytes) = result.cover_bytes {
-                    self.audio_cache.put_cover(result.song_id, cover_bytes).await;
+                    self.audio_cache
+                        .put_cover(result.song_id, cover_bytes)
+                        .await;
                 }
                 tracing::info!(song_id = result.song_id, "Pre-cache: written to disk cache");
             }
@@ -912,7 +959,8 @@ impl App {
                         break;
                     }
                 }
-                self.page_stack.push(Page::Login(crate::pages::login::LoginPage::new()));
+                self.page_stack
+                    .push(Page::Login(crate::pages::login::LoginPage::new()));
             }
             PageAction::Replace(page) => {
                 if let Some(top) = self.page_stack.last_mut() {
@@ -1080,7 +1128,9 @@ impl App {
             // ── Play queue ──────────────────────────────────────────────
             PageAction::PlayQueue(songs) => {
                 self.play_queue.load(songs);
-                self.do_play_next().await;
+                if let Some(song) = self.play_queue.current().cloned() {
+                    self.do_play_song(song).await;
+                }
             }
 
             // ── Play queue from specific index ────────────────────────
@@ -1110,7 +1160,9 @@ impl App {
                 match client.playlist_detail(playlist_id).await {
                     Ok(tracks) => {
                         self.play_queue.load(tracks.clone());
-                        self.do_play_next().await;
+                        if let Some(song) = self.play_queue.current().cloned() {
+                            self.do_play_song(song).await;
+                        }
                         for page in &mut self.page_stack {
                             if let Page::Playlist(pp) = page {
                                 pp.set_tracks(tracks);
@@ -1156,7 +1208,9 @@ impl App {
                             tracing::debug!("TogglePause ignored: song is loading");
                         }
                         ToggleAction::Replay(Some(song)) => {
-                            tracing::warn!("TogglePause with no active state, replaying current song");
+                            tracing::warn!(
+                                "TogglePause with no active state, replaying current song"
+                            );
                             self.do_play_song(song).await;
                         }
                         ToggleAction::Replay(None) => {
@@ -1169,7 +1223,11 @@ impl App {
                         let vol = (player.volume() * 100.0) as u16;
                         for page in &mut self.page_stack {
                             if let Page::Player(pp) = page {
-                                pp.update_from_player(player.position(), player.duration(), playing);
+                                pp.update_from_player(
+                                    player.position(),
+                                    player.duration(),
+                                    playing,
+                                );
                                 pp.set_volume(vol);
                                 break;
                             }
@@ -1254,5 +1312,79 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use netune_core::models::{Album, Artist, QualityLevel};
+
+    fn make_song(id: u64, name: &str) -> Song {
+        Song {
+            id,
+            name: name.to_string(),
+            artists: vec![Artist {
+                id: 1,
+                name: "Artist".to_string(),
+            }],
+            album: Album {
+                id: 1,
+                name: "Album".to_string(),
+                cover_url: None,
+            },
+            duration: 180_000,
+            quality: QualityLevel::Standard,
+        }
+    }
+
+    fn player_song_id(app: &App) -> Option<u64> {
+        app.page_stack.iter().find_map(|page| {
+            if let Page::Player(pp) = page {
+                pp.song().map(|song| song.id)
+            } else {
+                None
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn play_queue_starts_from_first_track() {
+        let mut app = App::new();
+        app.api_client = None;
+        let songs = vec![make_song(1, "One"), make_song(2, "Two")];
+
+        app.apply_action(PageAction::PlayQueue(songs)).await;
+
+        assert_eq!(app.play_queue.current_index(), 0);
+        assert_eq!(player_song_id(&app), Some(1));
+    }
+
+    #[tokio::test]
+    async fn failed_playback_advances_to_next_track() {
+        let mut app = App::new();
+        app.api_client = None;
+        let songs = vec![make_song(1, "One"), make_song(2, "Two")];
+        app.play_queue.load(songs.clone());
+        app.update_player_page_for(songs[0].clone());
+        app.pending_play = Some(tokio::spawn({
+            let song = songs[0].clone();
+            async move {
+                PendingPlayResult {
+                    song_id: song.id,
+                    _song: song,
+                    playback_error: Some("no url available".to_string()),
+                    audio_bytes: None,
+                    lyrics: None,
+                    cover_protocol: None,
+                }
+            }
+        }));
+
+        tokio::task::yield_now().await;
+        app.poll_pending_play().await;
+
+        assert_eq!(app.play_queue.current_index(), 1);
+        assert_eq!(player_song_id(&app), Some(2));
     }
 }

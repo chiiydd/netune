@@ -10,12 +10,12 @@
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::Frame;
 use ratatui::layout::Size;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use ratatui::Frame;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::Protocol;
 use ratatui_image::{Image, Resize};
@@ -39,6 +39,7 @@ pub struct PlayerPage {
     loading: bool,
     loading_tick: usize,
     lyrics: Option<Lyrics>,
+    playback_error: Option<String>,
     current_lyric_idx: usize,
     volume: u16,
     play_mode: PlayMode,
@@ -66,6 +67,7 @@ impl PlayerPage {
             loading: false,
             loading_tick: 0,
             lyrics: None,
+            playback_error: None,
             current_lyric_idx: 0,
             volume: 80,
             play_mode: PlayMode::Sequential,
@@ -82,12 +84,14 @@ impl PlayerPage {
         self.is_playing = true;
         self.current_lyric_idx = 0;
         self.lyrics = None;
+        self.playback_error = None;
         // Clear old cover — will be set by set_cover_bytes() when download completes.
         self.cover = None;
     }
 
     pub fn clear_lyrics(&mut self) {
         self.lyrics = None;
+        self.playback_error = None;
         self.current_lyric_idx = 0;
     }
 
@@ -105,7 +109,14 @@ impl PlayerPage {
     }
 
     pub fn set_lyrics(&mut self, lyrics: Lyrics) {
+        self.playback_error = None;
         self.lyrics = Some(lyrics);
+        self.current_lyric_idx = 0;
+    }
+
+    pub fn set_playback_error(&mut self, error: String) {
+        self.playback_error = Some(error);
+        self.lyrics = None;
         self.current_lyric_idx = 0;
     }
 
@@ -249,7 +260,9 @@ impl PlayerPage {
             let info_texts: [(&str, Style); 3] = [
                 (
                     title.as_str(),
-                    Style::default().fg(Theme::FG()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::FG())
+                        .add_modifier(Modifier::BOLD),
                 ),
                 (artists.as_str(), Style::default().fg(Theme::ACCENT())),
                 (album.as_str(), Style::default().fg(Theme::FG_DIM())),
@@ -464,6 +477,13 @@ impl PlayerPage {
         let inner_height = area.height as usize;
 
         let lines: Vec<Line> = match &self.lyrics {
+            _ if self.playback_error.is_some() => vec![Line::from(Span::styled(
+                format!(
+                    "  Playback unavailable: {}",
+                    self.playback_error.as_deref().unwrap_or("unknown error")
+                ),
+                Style::default().fg(Theme::MUTED()),
+            ))],
             None => vec![Line::from(Span::styled(
                 "  Loading lyrics…",
                 Style::default().fg(Theme::MUTED()),

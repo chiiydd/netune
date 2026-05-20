@@ -43,6 +43,7 @@ impl PlayQueue {
         self.songs = songs;
         self.current = 0;
         self.history.clear();
+        self.next_shuffle_idx = None;
     }
 
     /// Append a single song to the end of the queue.
@@ -59,6 +60,7 @@ impl PlayQueue {
             return None;
         }
         let song = self.songs.remove(index);
+        self.next_shuffle_idx = None;
         if index < self.current {
             self.current = self.current.saturating_sub(1);
         } else if index == self.current
@@ -102,6 +104,7 @@ impl PlayQueue {
         if index < self.songs.len() {
             self.history.push(self.current);
             self.current = index;
+            self.next_shuffle_idx = None;
             self.songs.get(self.current)
         } else {
             None
@@ -112,6 +115,7 @@ impl PlayQueue {
     pub fn skip_to(&mut self, idx: usize) -> Option<&Song> {
         if idx < self.songs.len() {
             self.current = idx;
+            self.next_shuffle_idx = None;
             self.songs.get(self.current)
         } else {
             None
@@ -138,8 +142,7 @@ impl PlayQueue {
     /// Pre-compute and store the next shuffle index.
     fn ensure_shuffle_peek(&mut self) {
         if self.mode == PlayMode::Shuffle && self.next_shuffle_idx.is_none() {
-            self.next_shuffle_idx =
-                Some(Self::pick_shuffle_index(self.songs.len(), self.current));
+            self.next_shuffle_idx = Some(Self::pick_shuffle_index(self.songs.len(), self.current));
         }
     }
 
@@ -189,9 +192,10 @@ impl PlayQueue {
             }
             PlayMode::Shuffle => {
                 self.history.push(self.current);
-                let next = self.next_shuffle_idx.take().unwrap_or_else(|| {
-                    Self::pick_shuffle_index(self.songs.len(), self.current)
-                });
+                let next = self
+                    .next_shuffle_idx
+                    .take()
+                    .unwrap_or_else(|| Self::pick_shuffle_index(self.songs.len(), self.current));
                 self.current = next;
             }
         }
@@ -208,6 +212,7 @@ impl PlayQueue {
         } else if self.current > 0 {
             self.current -= 1;
         }
+        self.next_shuffle_idx = None;
         self.songs.get(self.current)
     }
 
@@ -219,6 +224,7 @@ impl PlayQueue {
     /// Set the play mode directly.
     pub fn set_repeat_mode(&mut self, mode: PlayMode) {
         self.mode = mode;
+        self.next_shuffle_idx = None;
     }
 
     /// Cycle play mode: Sequential → LoopAll → LoopOne → Shuffle → Sequential.
@@ -229,6 +235,7 @@ impl PlayQueue {
             PlayMode::LoopOne => PlayMode::Shuffle,
             PlayMode::Shuffle => PlayMode::Sequential,
         };
+        self.next_shuffle_idx = None;
     }
 
     /// Shuffle the queue (Fisher-Yates) while keeping the current song in place.
@@ -252,6 +259,7 @@ impl PlayQueue {
         self.songs.insert(0, current_song);
         self.current = 0;
         self.history.clear();
+        self.next_shuffle_idx = None;
     }
 
     /// Get a reference to all songs in the queue.
@@ -547,6 +555,18 @@ mod tests {
     }
 
     #[test]
+    fn test_queue_load_clears_stale_shuffle_peek() {
+        let mut q = queue_with_three();
+        q.set_repeat_mode(PlayMode::Shuffle);
+        assert!(q.peek_next().is_some());
+
+        q.load(vec![make_song(10, "New A")]);
+
+        assert_eq!(q.advance().unwrap().name, "New A");
+        assert_eq!(q.current_index(), 0);
+    }
+
+    #[test]
     fn test_queue_save_and_load() {
         let q = queue_with_three();
         let dir = tempfile::tempdir().unwrap();
@@ -586,8 +606,7 @@ mod tests {
 
     #[test]
     fn test_queue_load_nonexistent() {
-        let result =
-            PlayQueue::load_from_file(std::path::Path::new("/nonexistent/queue.json"));
+        let result = PlayQueue::load_from_file(std::path::Path::new("/nonexistent/queue.json"));
         assert!(result.is_err());
     }
 
@@ -674,7 +693,10 @@ mod tests {
                 break;
             }
         }
-        assert!(got_different, "peek_next should return a different song in shuffle mode");
+        assert!(
+            got_different,
+            "peek_next should return a different song in shuffle mode"
+        );
     }
 
     #[test]

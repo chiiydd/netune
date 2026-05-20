@@ -1,511 +1,216 @@
-# 暂停键失灵问题排查记录
+# 播放卡在 PAUSED 状态排查与修复记录
 
 ## 问题描述
 
-快速连续切换歌曲后，暂停键无法响应，歌曲不播放，UI 卡在 paused 状态。
+TUI 播放器曾出现两类看起来相同的现象：
 
-## 排查过程
+1. 快速连续切歌后，界面显示 `PAUSED`，按暂停键无效，继续切歌偶尔失效。
+2. 某些特定歌曲始终无法播放，例如 `飞跃经济舱 (LIVE版)`，界面停在 `PAUSED`。
 
-### 第一轮：线程竞态条件（部分正确）
+这两类问题的 UI 表现相同，但根因不同。最终结论是：不能只看 `PlayerPage.is_playing` 或 rodio 的 pause 状态，必须沿着 `PageAction -> PlayQueue -> do_play_song -> pending_play -> NetunePlayer -> poll_pending_play -> PlayerPage` 完整追踪。
 
-**假设**：`play_from_bytes` 内部 spawn 的 `std::thread` 在 tokio task 被 abort 后继续运行，造成"幽灵播放"。
+## 最终结论
 
-**关键代码**（修复前）：
+### 1. 原来的解决方法是否正确
 
-```rust
-// player.rs — play_from_bytes 的旧实现
-async fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
-    // 1. 停掉旧播放
-    if let Ok(mut state) = self.state.lock() {
-        if let Some(old) = state.take() {
-            old.player.stop();  // state 变成 None
-        }
+原文中的几轮修复并不是完全错误，但它们只覆盖了部分风险：
+
+| 修复方向 | 是否正确 | 说明 |
+|----------|----------|------|
+| `generation` 计数器 | 正确，但不完整 | 可以防止旧播放任务晚写入 `PlaybackState`，避免幽灵播放。 |
+| `spawn_blocking` 承载音频解码/设备打开 | 正确，但不解决所有取消问题 | `spawn_blocking` 仍不能被 `abort()` 强制停止，所以仍需要 generation 检查。 |
+| 音频设备打开重试 | 合理的防御性措施 | 快速切歌时设备可能短暂不可用，但它不是“特定歌曲 PAUSED”的根因。 |
+| `TogglePause` recovery | 只能兜底 | `state=None` 时可尝试重播，但如果歌曲本身没有可播放 URL，重播仍会失败。 |
+| 封面解码移到 blocking 线程 | 正确 | 避免 debug 模式下图片解码阻塞 tokio async worker。 |
+
+原文的问题是把“PAUSED”过早归因到状态机丢失。后续验证表明，`PAUSED` 也可能是播放失败被静默吞掉后的正常 UI 同步结果。
+
+### 2. 当前确认的根因
+
+#### 根因 A：不可播放歌曲没有被显式建模
+
+网易云 `song_url` 对无版权、VIP、地区限制、下架或现场版资源缺失歌曲可能返回：
+
+```json
+{
+  "code": 200,
+  "data": [
+    {
+      "id": 123,
+      "url": null,
+      "br": null,
+      "fee": 1
     }
-
-    // 2. spawn 一个独立线程做音频解码
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    std::thread::Builder::new()
-        .spawn(move || {
-            // ... 音频解码、创建设备、播放 ...
-            rodio_player.append(decoder);  // 音频开始播放！
-            *state = Some(PlaybackState { ... });  // 写入 state
-            let _ = tx.send(result);
-        })?;
-
-    rx.await?  // 等待线程完成
+  ]
 }
 ```
 
+`netune-api::song_url()` 会把 `url: null` 转成 `no url available`。此前 `do_play_song()` 的后台任务只是写日志，然后继续获取歌词/封面并返回。`poll_pending_play()` 看到任务成功结束后清掉 loading，`sync_player_state()` 又读到 `duration=0`、`is_playing=false`，于是 UI 显示 `PAUSED`。
+
+这不是暂停，而是“播放不可用”。
+
+#### 根因 B：队列加载后直接调用 `do_play_next()`
+
+`PageAction::PlayQueue` 和歌单详情加载原本是：
+
 ```rust
-// app.rs — 切歌时的调用链
-async fn do_play_song(&mut self, song: Song) {
-    if let Some(handle) = self.pending_play.take() {
-        handle.abort();  // 取消旧 task
-    }
-    if let Some(ref player) = self.player {
-        player.stop();   // state = None，音频停止
-    }
-    // spawn 新 task → 调用 play_from_bytes
-    self.pending_play = Some(tokio::spawn(async move {
-        p.play_from_bytes(bytes).await;  // 内部 spawn 线程
-    }));
+self.play_queue.load(songs);
+self.do_play_next().await;
+```
+
+`load()` 已经把 current 指向第一首，随后 `do_play_next()` 又调用 `advance()`，导致实际从第二首开始播。连续切歌时更容易过早到达队尾，表现为“不能继续切歌”。
+
+修复后改为播放当前歌曲：
+
+```rust
+self.play_queue.load(songs);
+if let Some(song) = self.play_queue.current().cloned() {
+    self.do_play_song(song).await;
 }
 ```
 
-**问题分析**：
+#### 根因 C：shuffle 预取索引污染新队列
 
-当用户快速切歌 A → B → C 时：
+`peek_next()` 在 Shuffle 模式下会缓存 `next_shuffle_idx`，保证 UI 预取的下一首和 `advance()` 实际播放的下一首一致。此前在 `load()`、`jump()`、`skip_to()`、`prev()`、`shuffle()`、切换播放模式等状态变化后没有清空该缓存。
 
-```
-时间线：
-t0  do_play_song(A) → stop() [state=None] → spawn task_A
-t1  task_A: play_from_bytes(A) → spawn thread_A [正在解码...]
-t2  do_play_song(B) → abort task_A → stop() [state=None] → spawn task_B
-    ⚠ thread_A 没有被 abort！它还在跑！
-t3  task_B: play_from_bytes(B) → spawn thread_B [正在解码...]
-t4  do_play_song(C) → abort task_B → stop() [state=None] → spawn task_C
-    ⚠ thread_A 和 thread_B 都还在跑！
-t5  thread_A 完成 → 写入 state(Some(A)) → 但 C 才是当前歌曲
-t6  thread_B 完成 → 写入 state(Some(B)) → 覆盖了 A
-t7  thread_C 完成 → 写入 state(Some(C)) → 最终状态
-```
+如果旧队列缓存了一个索引，新队列更短，下一次 `advance()` 可能返回 `None`。App 已经 stop 了当前播放器，但没有下一首可播，UI 就停在 `PAUSED`。
 
-关键问题：**`handle.abort()` 只能取消 tokio task，不能取消 `std::thread`**。线程会继续运行并写入过期的 state。
+## 当前修复方案
 
-**知识点：tokio task 的取消机制**
+### 1. 播放失败显式传回 App
 
-```
-handle.abort()
-    │
-    ▼
-task 被标记为 "cancelled"
-    │
-    ▼
-task 在下一个 .await 点收到 Cancelled 错误
-    │
-    ▼
-task 的 future 被 drop
-    │
-    ├── async 代码：.await 被中断，已持有的资源被释放
-    │
-    ├── spawn_blocking 闭包：不受影响，继续运行直到返回
-    │
-    └── std::thread：不受影响，继续运行到自然结束
-```
-
-**修复**：添加 `AtomicU64` generation counter，线程写入前检查计数器。
+`PendingPlayResult` 增加 `playback_error`：
 
 ```rust
-// 修复后的 play_from_bytes
-async fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
-    let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    // ... stop old playback ...
-
-    std::thread::Builder::new().spawn(move || {
-        // ... 解码、创建设备、播放 ...
-        rodio_player.append(decoder);
-
-        // ⭐ 写入前检查：generation 是否还匹配？
-        if gen_ref.load(Ordering::SeqCst) != my_gen {
-            return Ok(());  // 已被更新的 play 取代，丢弃结果
-        }
-
-        *state = Some(PlaybackState { ... });
-        Ok(())
-    })?;
+struct PendingPlayResult {
+    song_id: u64,
+    _song: Song,
+    playback_error: Option<String>,
+    audio_bytes: Option<Vec<u8>>,
+    lyrics: Option<Lyrics>,
+    cover_protocol: Option<ratatui_image::protocol::Protocol>,
 }
 ```
 
-```rust
-// stop() 也要递增 generation
-fn stop(&self) {
-    self.generation.fetch_add(1, Ordering::SeqCst);
-    if let Ok(mut state) = self.state.lock() {
-        if let Some(ref ps) = *state {
-            ps.player.stop();
-        }
-        *state = None;
-    }
-}
-```
+以下失败都会写入 `playback_error`：
 
-**结果**：解决了幽灵播放，但问题依旧。
+- `song_url()` 返回 `no url available`
+- 下载音频失败
+- 读取音频 body 失败
+- `play_from_bytes()` 解码或打开设备失败
+- 没有音频播放器实例
 
----
+### 2. 播放失败时跳过或显示错误
 
-### 第二轮：spawn_blocking 替代 std::thread
-
-**假设**：独立 `std::thread` 不受 tokio 管理，应该用 `spawn_blocking`。
-
-**修复**：
+`poll_pending_play()` 处理当前歌曲失败结果：
 
 ```rust
-// 旧：std::thread + oneshot channel
-let (tx, rx) = tokio::sync::oneshot::channel();
-std::thread::Builder::new().spawn(move || {
-    // ... 重活 ...
-    let _ = tx.send(result);
-})?;
-rx.await.map_err(|e| ...)??
-
-// 新：spawn_blocking
-let handle = tokio::task::spawn_blocking(move || {
-    // ... 重活（同样的代码）...
-    Ok(())
-});
-handle.await.map_err(|e| ...)??
-```
-
-**知识点：tokio 的两种线程池**
-
-| 线程池 | 用途 | 调度方式 | 特点 |
-|--------|------|----------|------|
-| async worker | `tokio::spawn` 的 future | 协作式，`.await` 点切换 | 数量少（默认=CPU核数） |
-| blocking pool | `spawn_blocking` 的闭包 | OS 线程抢占式 | 动态扩展，上限 512 |
-
-```rust
-// async worker 上的任务必须在 .await 点让出
-tokio::spawn(async {
-    network_request().await;  // 让出：等网络 I/O
-    another_request().await;  // 让出：等网络 I/O
-});
-
-// spawn_blocking 的闭包不需要 .await，OS 线程会抢占调度
-tokio::task::spawn_blocking(|| {
-    heavy_computation();  // 不让出也没关系，OS 线程会调度
-});
-```
-
-同时添加了 early generation check——在重活开始前就检查，避免浪费 CPU：
-
-```rust
-let handle = tokio::task::spawn_blocking(move || {
-    // ⭐ 最早的检查点：解码前
-    if gen_ref.load(Ordering::SeqCst) != my_gen {
-        return Ok(());
-    }
-
-    let decoder = Decoder::new(cursor)?;
-
-    // ⭐ 第二个检查点：开音频设备前（这个操作可能和其他 task 冲突）
-    if gen_ref.load(Ordering::SeqCst) != my_gen {
-        return Ok(());
-    }
-
-    let device_sink = DeviceSinkBuilder::open_default_sink()?;
-    rodio_player.append(decoder);
-
-    // ⭐ 最后一个检查点：写入 state 前
-    if gen_ref.load(Ordering::SeqCst) != my_gen {
-        return Ok(());
-    }
-
-    *state = Some(PlaybackState { ... });
-    Ok(())
-});
-```
-
-**结果**：问题依旧。`spawn_blocking` 的任务在 JoinHandle 被 drop 后仍然继续运行。
-
----
-
-### 第三轮：设备打开重试
-
-**假设**：音频设备竞争导致 `DeviceSinkBuilder::open_default_sink()` 失败。
-
-**修复**：
-
-```rust
-// 设备打开重试逻辑
-let mut device_sink = None;
-for attempt in 1..=3u32 {
-    match DeviceSinkBuilder::open_default_sink() {
-        Ok(mut ds) => {
-            ds.log_on_drop(false);
-            device_sink = Some(ds);
-            break;
-        }
-        Err(e) => {
-            tracing::warn!(attempt, error = %e, "Failed to open audio device, retrying");
-            if attempt < 3 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            } else {
-                return Err(NetuneError::Player(format!(
-                    "Failed to open audio device after 3 attempts: {e}"
-                )));
-            }
-        }
-    }
-}
-```
-
-**结果**：日志中没有出现设备打开失败。问题依旧。
-
----
-
-### 第四轮：TogglePause 兜底逻辑
-
-**假设**：state 丢失后用户无法恢复。
-
-**修复**：
-
-```rust
-// 旧的 TogglePause 处理
-PageAction::TogglePause => {
-    if let Some(ref player) = self.player {
-        player.toggle_pause();  // state=None 时什么都不做
-    }
-}
-
-// 新的 TogglePause 处理：三种情况分别处理
-PageAction::TogglePause => {
-    let action = self.player.as_ref().map(|player| {
-        if player.duration() > 0.0 {
-            ToggleAction::Toggle           // 正常播放中 → 切换暂停
-        } else if self.pending_play.is_some() {
-            ToggleAction::Ignore           // 正在加载 → 忽略
-        } else {
-            ToggleAction::Replay(current_song)  // state 丢失 → 重播
-        }
-    });
-
-    match action {
-        Some(ToggleAction::Toggle) => player.toggle_pause(),
-        Some(ToggleAction::Replay(song)) => self.do_play_song(song).await,
-        _ => {}
-    }
-}
-```
-
-**知识点：Rust 借用检查器的限制**
-
-这个修复遇到了借用冲突：
-
-```rust
-// ❌ 编译失败：不可变借用跨越了可变借用
-if let Some(ref player) = self.player {      // 借用 self.player
-    if player.duration() > 0.0 {
-        player.toggle_pause();
+if let Some(error) = result.playback_error {
+    self.set_player_loading(false);
+    let should_try_next = self
+        .play_queue
+        .peek_next()
+        .is_some_and(|song| song.id != result.song_id);
+    if should_try_next {
+        self.do_play_next().await;
     } else {
-        self.do_play_song(song).await;        // 需要 &mut self！冲突！
+        pp.set_playback_error(error);
     }
+    return;
 }
 ```
 
-解决方法——先做决策（不可变借用），再执行（可变借用）：
+效果：
 
-```rust
-// ✓ 先用不可变借用做决策
-let action = self.player.as_ref().map(|player| {
-    if player.duration() > 0.0 { ToggleAction::Toggle }
-    else { ToggleAction::Replay(song) }
-});
+- 队列播放时，当前歌曲不可播放会自动尝试下一首。
+- 单曲播放或队尾无下一首时，播放器页歌词区域显示 `Playback unavailable: ...`。
+- 不再把播放失败伪装成普通 `PAUSED`。
 
-// 再用可变借用执行（不再持有不可变借用）
-match action {
-    Some(ToggleAction::Toggle) => { self.player.as_mut().unwrap().toggle_pause(); }
-    Some(ToggleAction::Replay(s)) => { self.do_play_song(s).await; }
-    _ => {}
-}
+### 3. 队列状态变更时清空 shuffle 预取
+
+以下操作都会清空 `next_shuffle_idx`：
+
+- `load`
+- `remove`
+- `jump`
+- `skip_to`
+- `prev`
+- `set_repeat_mode`
+- `cycle_mode`
+- `shuffle`
+
+原则：任何会改变歌曲列表、当前索引或播放模式的操作，都必须让 shuffle 预取失效。
+
+## 固化后的 TUI 播放调试流程
+
+### 1. 复现
+
+启动 TUI：
+
+```sh
+RUST_LOG=debug cargo run --release
 ```
 
-**结果**：按空格能触发 recovery（显示 loading），但歌曲仍然不播放。
+日志固定写入：
 
----
-
-### 第五轮：日志分析（找到根因）
-
-请求用户提供 `RUST_LOG=debug` 日志。
-
-**关键日志片段**：
-
-```
-08:55:34.236  DEBUG player.rs:220  Playback started from cached bytes duration=304.88
-08:55:34.532  INFO  app.rs:364    poll_pending_play processed ms=0
-                                    ← 正常：playback 启动，loading 清除
-
-... 用户快速切歌，多次重复上述模式 ...
-
-08:55:34.532  INFO  app.rs:364    poll_pending_play processed ms=0
-                                    ← 最后一次成功的 playback
-... 8 秒空白 ...
-08:55:42.521  INFO  app.rs:281    Cover decoded in background task ms=7367
-                                    ← ⚠ 旧 task 的 cover 解码耗时 7.3 秒！
-08:55:42.576  INFO  app.rs:364    poll_pending_play processed ms=0
-08:55:43.880  WARN  app.rs:1138   TogglePause with no active state, replaying current song
-                                    ← 用户按空格，触发 recovery
-... 没有 "Playing from audio cache" 日志！play_from_bytes 根本没执行 ...
-08:55:50.831  INFO  app.rs:281    Cover decoded in background task ms=19352
-                                    ← 又一个旧 task 的 cover 解码，耗时 19 秒！
-08:55:51.479  INFO  app.rs:364    poll_pending_play processed ms=0
+```sh
+/tmp/netune.log
 ```
 
-**关键发现**：
+另开终端观察：
 
-1. recovery 触发后没有 "Playing from audio cache" 日志 → `play_from_bytes` **根本没执行到**
-2. cover 解码耗时 7-19 秒（debug 模式下 `image::load_from_memory` 是纯 CPU 操作）
-3. 多个旧 task 的 cover 解码同时在跑
-
-**根因**：cover 解码在 tokio async worker 上直接运行，**阻塞了整个 runtime**。
-
-**问题代码**（修复前）：
-
-```rust
-// app.rs — spawned tokio task 内部
-self.pending_play = Some(tokio::spawn(async move {
-    // ① 缓存读取（async I/O，正常）
-    let (audio_result, lyrics_bytes, cover_bytes) = tokio::join!(
-        tokio::fs::read(&audio_path),
-        tokio::fs::read(&lyrics_path),
-        tokio::fs::read(&cover_path),
-    );
-
-    // ② 音频播放（内部用 spawn_blocking，正常）
-    p.play_from_bytes(bytes).await;
-
-    // ③ 网络请求获取歌词（async I/O，正常）
-    let lyrics = client.lyrics(song_id).await.ok();
-
-    // ④ cover 解码 — ⚠ 这里是问题！
-    let cover_protocol = cover.and_then(|bytes| {
-        let img = image::load_from_memory(&bytes).ok()?;  // 💥 纯 CPU 操作！
-        let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
-        // 在 debug 模式下，上面两行耗时 7-19 秒
-        // 这 7-19 秒内，tokio async worker 被完全占住
-        // 其他所有 async task（包括新的 do_play_song）全部排队等待
-        protocol
-    });
-
-    PendingPlayResult { song_id, audio_bytes, lyrics, cover_protocol }
-}));
+```sh
+tail -f /tmp/netune.log
 ```
 
-**知识点：tokio async worker 的饥饿问题**
+复现步骤：
 
-tokio runtime 默认只有和 CPU 核心数一样多的 async worker 线程（比如 8 核 = 8 个 worker）。每个 worker 在任意时刻只能运行一个 task。task 只有在 `.await` 点才会让出 worker。
+1. 搜索目标歌曲。
+2. 播放可疑歌曲，例如 `飞跃经济舱 (LIVE版)`。
+3. 观察是否出现 `Playback failed for current song`。
+4. 如果是队列播放，确认是否自动跳到下一首。
+5. 如果没有下一首，确认播放器页是否显示 `Playback unavailable: ...`。
 
-```
-async worker 线程 (假设只有 1 个，简化示意)
+### 2. 必查日志点
 
-task_1: |████ cover 解码 19秒 ████|.await|返回|
-task_2: 　　　　　　　　排队等待中...　　　　|执行|.await|
-task_3: 　　　　　　　　排队等待中...　　　　　　|执行|
+按顺序看这些日志，而不是只看 UI：
 
-← task_2 和 task_3 被 task_1 的 CPU 密集操作饿死了
-```
+| 边界 | 期望日志/状态 | 异常含义 |
+|------|----------------|----------|
+| `song_url` | 有 URL 或 `Failed to get song URL` | 无版权、VIP、下架、地区限制或接口失败。 |
+| 音频下载 | 成功读到 bytes 或 `Failed to download audio` | CDN、网络或 URL 失效。 |
+| `play_from_bytes` | `Playback started from cached bytes` | 解码或设备打开失败。 |
+| `poll_pending_play` | `poll_pending_play processed` | 正常完成并更新 UI。 |
+| 失败分支 | `Playback failed for current song` | 当前歌曲不可播放，必须跳过或显示错误。 |
 
-快速切歌时，每次切歌 spawn 一个新 task。旧 task 的 cover 解码占住 worker，新 task 无法执行。用户看到的现象就是：loading 转几秒，然后回到暂停状态。
+### 3. 判断准则
 
-**修复**：把 cover 解码移到 `spawn_blocking`。
+不要直接把 `PAUSED` 当成暂停状态。先分三类：
 
-```rust
-// 修复后的代码
-let cover_protocol = match cover {
-    Some(bytes) => {
-        match tokio::task::spawn_blocking(move || {
-            // 现在这些 CPU 密集操作在 blocking 线程池上运行
-            // 不会阻塞 async worker
-            let img = image::load_from_memory(&bytes).ok()?;
-            let protocol = picker.new_protocol(img, size, Resize::Fit(None)).ok();
-            protocol
-        }).await {
-            Ok(protocol) => protocol,
-            Err(e) => {
-                tracing::warn!(error = %e, "Cover decode task failed");
-                None
-            }
-        }
-    }
-    None => None,
-};
+1. `duration > 0` 且 `is_paused=true`：真实暂停。
+2. `duration == 0` 且 `pending_play.is_some()`：仍在加载。
+3. `duration == 0` 且 `pending_play.is_none()`：播放失败或没有 active state，需要看 `playback_error` 和日志。
+
+### 4. 回归测试
+
+本问题固定用两个测试防回归：
+
+```sh
+cargo test -p netune-player test_queue_load_clears_stale_shuffle_peek
+cargo test -p netune-tui failed_playback_advances_to_next_track
 ```
 
-**结果**：问题解决。
+完整相关验证：
 
----
-
-## 涉及的 Commit
-
-| Commit | 内容 | 是否有效 |
-|--------|------|----------|
-| `4a340c5` | generation counter | ✓ 防止幽灵播放 |
-| `26f787f` | spawn_blocking + early gen check | ✓ 更好的线程管理 |
-| `1a761f5` | 设备打开重试 | ✓ 防御性措施 |
-| `e29fb6c` | TogglePause 兜底逻辑 | ✓ 用户可恢复 |
-| `86a2fa7` | cover 解码移到 spawn_blocking | ✓ **根因修复** |
-
-## 教训总结
-
-### 1. 先看日志，再改代码
-
-前四轮都在猜测问题原因，改了四次都没解决。第五轮看了日志后 5 分钟就定位了根因。
-
-**规则**：任何涉及运行时行为的 bug，第一步应该是加日志复现，而不是凭代码走读猜测。
-
-### 2. async worker 上不能跑 CPU 密集操作
-
-tokio 的 async worker 线程是协作式调度。一个 task 不 `.await` 就不会让出 worker。`image::load_from_memory` 耗时 7-19 秒（debug 模式），直接在 async worker 上运行等于把整个 worker 冻结 7-19 秒。
-
-**规则**：async 函数中超过 1ms 的同步 CPU 操作，必须放到 `spawn_blocking`。
-
-### 3. spawn_blocking / std::thread 不能被 abort
-
-`handle.abort()` 只能在 `.await` 点取消 future。`spawn_blocking` 的闭包和 `std::thread` 都不包含 `.await`，所以不会被取消。
-
-**规则**：需要取消能力的长时间操作，必须在操作内部检查取消标志（generation counter）。
-
-### 4. Generation Counter 模式
-
-用于跨线程/task 的"版本号"机制，解决取消和竞态问题：
-
-```rust
-// 每次发起新操作时递增
-let my_gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
-
-// 在关键节点检查版本是否还匹配
-if generation.load(Ordering::SeqCst) != my_gen {
-    return; // 已被更新的操作取代，安全退出
-}
+```sh
+cargo test -p netune-player
+cargo test -p netune-tui
 ```
 
-适用于：异步操作链中的取消传播、"只保留最新结果"的去重、多生产者单消费者的结果竞争。
+## 经验规则
 
-### 5. 问题可能是多层的
-
-这个 bug 实际上是多个问题叠加：
-- 线程竞态（generation counter 修复）
-- 音频设备竞争（重试机制防御）
-- async runtime 阻塞（spawn_blocking 修复）
-- 用户无法恢复（TogglePause 兜底）
-
-单独修复任何一层都不够。需要系统性地排查每一层。
-
----
-
-## 附录：Rust 异步编程速查
-
-### spawn vs spawn_blocking 选择
-
-```
-你的代码里有 .await 吗？
-├── 有 → tokio::spawn（async task）
-└── 没有 → tokio::task::spawn_blocking（blocking task）
-```
-
-| 操作 | 类型 | 正确用法 |
-|------|------|----------|
-| 网络请求 (reqwest) | async I/O | `spawn` + `.await` |
-| 文件读写 (tokio::fs) | async I/O | `spawn` + `.await` |
-| 图片/音频解码 | CPU 密集 | `spawn_blocking` |
-| JSON 序列化（大数据） | CPU 密集 | `spawn_blocking` |
-| std::fs::read | 同步阻塞 I/O | `spawn_blocking` |
-
-### 常见陷阱
-
-| 陷阱 | 症状 | 修复 |
-|------|------|------|
-| async worker 上跑 CPU 密集 | UI 卡顿、task 堆积 | `spawn_blocking` |
-| abort 后 spawn_blocking 继续运行 | 资源泄漏、竞态 | generation counter |
-| Mutex 跨 .await 持有 | 死锁（tokio 检测并 panic） | 缩小锁范围 |
-| 不可变借用跨越可变借用 | 编译错误 | 先决策再执行 |
-| `is_paused()` 在曲目结束后返回 false | 状态不准 | 用 `pos >= dur` 判断 |
+1. `PAUSED` 是 UI 显示结果，不一定代表用户按了暂停。
+2. 播放失败必须进入显式错误状态，不能只写日志后清 loading。
+3. `abort()` 不能取消已经运行的 blocking work，跨线程播放仍需要 generation。
+4. `peek_next()` 这种缓存必须有清晰失效点。
+5. TUI 问题必须沿事件、队列、后台任务、播放器状态、页面状态逐层追踪。
