@@ -116,6 +116,12 @@ impl App {
             handle.abort();
         }
 
+        // Stop currently playing audio immediately to avoid desync when
+        // the user skips songs faster than new audio loads.
+        if let Some(ref player) = self.player {
+            player.stop();
+        }
+
         // Immediately show the player page with loading state.
         self.update_player_page_for(song.clone());
         for page in &mut self.page_stack {
