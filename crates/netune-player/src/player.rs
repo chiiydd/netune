@@ -3,6 +3,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,12 +28,15 @@ struct PlaybackState {
 pub struct NetunePlayer {
     /// Current playback state — `None` when stopped or not yet started.
     state: Arc<Mutex<Option<PlaybackState>>>,
+    /// Generation counter to detect superseded playback requests.
+    generation: Arc<AtomicU64>,
 }
 
 impl NetunePlayer {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(None)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -46,6 +50,16 @@ impl Default for NetunePlayer {
 #[async_trait]
 impl AudioPlayer for NetunePlayer {
     async fn play(&self, url: &str) -> Result<()> {
+        // Increment generation to invalidate any previous threads.
+        self.generation.fetch_add(1, Ordering::SeqCst);
+
+        // Read volume BEFORE stopping old playback.
+        let prev_volume = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
+
         // Stop and drop old playback.
         if let Ok(mut state) = self.state.lock() {
             if let Some(old) = state.take() {
@@ -81,11 +95,6 @@ impl AudioPlayer for NetunePlayer {
         let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
 
         // Apply the previously-set volume (if any).
-        let prev_volume = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
         if let Some(vol) = prev_volume {
             rodio_player.set_volume(vol);
         }
@@ -110,6 +119,16 @@ impl AudioPlayer for NetunePlayer {
     }
 
     async fn play_from_bytes(&self, bytes: Vec<u8>) -> Result<()> {
+        // Increment generation to invalidate any previous threads.
+        let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // Read volume BEFORE stopping old playback.
+        let prev_volume = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
+
         // Stop old playback (fast, just sets a flag).
         if let Ok(mut state) = self.state.lock() {
             if let Some(old) = state.take() {
@@ -118,11 +137,7 @@ impl AudioPlayer for NetunePlayer {
         }
 
         let state_ref = Arc::clone(&self.state);
-        let prev_volume = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|s| s.as_ref().map(|ps| ps.player.volume()));
+        let gen_ref = Arc::clone(&self.generation);
 
         // Use a dedicated thread for heavy audio work — never blocks tokio.
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -151,9 +166,20 @@ impl AudioPlayer for NetunePlayer {
 
                     rodio_player.append(decoder);
 
+                    // Check: has a newer play been requested or stop called?
+                    if gen_ref.load(Ordering::SeqCst) != my_gen {
+                        tracing::debug!("Playback superseded by newer request, discarding");
+                        return Ok(());
+                    }
+
                     let mut state = state_ref.lock().map_err(|e| {
                         NetuneError::Player(format!("Failed to acquire player state lock: {e}"))
                     })?;
+                    // Double-check after acquiring lock.
+                    if gen_ref.load(Ordering::SeqCst) != my_gen {
+                        tracing::debug!("Playback superseded after lock, discarding");
+                        return Ok(());
+                    }
                     *state = Some(PlaybackState {
                         _device_sink: device_sink,
                         player: rodio_player,
@@ -200,6 +226,7 @@ impl AudioPlayer for NetunePlayer {
     }
 
     fn stop(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut state) = self.state.lock() {
             if let Some(ref ps) = *state {
                 ps.player.stop();
