@@ -86,18 +86,18 @@ impl QueuePanel {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::ACCENT_DIM))
+            .border_style(Style::default().fg(Theme::ACCENT_DIM()))
             .title(Span::styled(
                 title_text,
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(Theme::ACCENT())
                     .add_modifier(Modifier::BOLD),
             ));
 
         if songs.is_empty() {
             let empty = ratatui::widgets::Paragraph::new(Line::from(Span::styled(
                 "  Queue is empty",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             )))
             .block(block);
             f.render_widget(empty, panel_area);
@@ -121,26 +121,26 @@ impl QueuePanel {
 
                 let name_style = if is_current {
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(Theme::ACCENT())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Theme::FG)
+                    Style::default().fg(Theme::FG())
                 };
 
                 let artist_style = if is_current {
                     Style::default()
-                        .fg(Theme::ACCENT_DIM)
+                        .fg(Theme::ACCENT_DIM())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Theme::MUTED)
+                    Style::default().fg(Theme::MUTED())
                 };
 
                 let duration_style = if is_current {
                     Style::default()
-                        .fg(Theme::ACCENT_DIM)
+                        .fg(Theme::ACCENT_DIM())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Theme::MUTED)
+                    Style::default().fg(Theme::MUTED())
                 };
 
                 ListItem::new(Line::from(vec![

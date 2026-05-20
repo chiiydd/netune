@@ -32,14 +32,14 @@ pub fn render_titlebar(f: &mut Frame, area: Rect, page_title: &str) {
         .split(area);
 
     let left = Line::from(vec![
-        Span::styled(" ♫ ", Style::default().fg(Theme::ACCENT)),
+        Span::styled(" ♫ ", Style::default().fg(Theme::ACCENT())),
         Span::styled(
             "netune",
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(Theme::ACCENT())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  netease cloud music", Style::default().fg(Theme::MUTED)),
+        Span::styled("  netease cloud music", Style::default().fg(Theme::MUTED())),
     ]);
     f.render_widget(Paragraph::new(left), cols[0]);
 
@@ -47,7 +47,7 @@ pub fn render_titlebar(f: &mut Frame, area: Rect, page_title: &str) {
         Span::styled(
             page_title.to_owned(),
             Style::default()
-                .fg(Theme::FG_DIM)
+                .fg(Theme::FG_DIM())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("   "),
@@ -67,17 +67,17 @@ pub fn render_statusline(
     let mut hint_spans: Vec<Span> = Vec::new();
     for (i, h) in hints.iter().enumerate() {
         if i > 0 {
-            hint_spans.push(Span::styled("  ·  ", Style::default().fg(Theme::MUTED)));
+            hint_spans.push(Span::styled("  ·  ", Style::default().fg(Theme::MUTED())));
         }
         hint_spans.push(Span::styled(
             h.key,
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(Theme::ACCENT())
                 .add_modifier(Modifier::BOLD),
         ));
         hint_spans.push(Span::styled(
             format!(" {}", h.label),
-            Style::default().fg(Theme::FG_DIM),
+            Style::default().fg(Theme::FG_DIM()),
         ));
     }
     hint_spans.push(Span::raw(" "));

@@ -118,7 +118,7 @@ impl PlaylistPage {
         let items: Vec<ListItem> = if self.playlists.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
                 "  No playlists loaded",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             )))]
         } else {
             self.playlists
@@ -136,7 +136,7 @@ impl PlaylistPage {
                         ]),
                         Line::from(vec![
                             Span::raw("    "),
-                            Span::styled(track_label, Style::default().fg(Theme::MUTED)),
+                            Span::styled(track_label, Style::default().fg(Theme::MUTED())),
                         ]),
                     ])
                 })
@@ -148,11 +148,11 @@ impl PlaylistPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                     .title(Span::styled(
                         " Playlists ",
                         Style::default()
-                            .fg(Theme::ACCENT)
+                            .fg(Theme::ACCENT())
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -172,7 +172,7 @@ impl PlaylistPage {
         let items: Vec<ListItem> = if self.tracks.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
                 "  No tracks",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             )))]
         } else {
             self.tracks
@@ -190,15 +190,15 @@ impl PlaylistPage {
                         Line::from(vec![
                             Span::styled(
                                 format!("  {:3} ", i + 1),
-                                Style::default().fg(Theme::MUTED),
+                                Style::default().fg(Theme::MUTED()),
                             ),
                             Span::styled(&song.name, Style::default().add_modifier(Modifier::BOLD)),
                             Span::raw("  "),
-                            Span::styled(duration, Style::default().fg(Theme::FG_DIM)),
+                            Span::styled(duration, Style::default().fg(Theme::FG_DIM())),
                         ]),
                         Line::from(vec![
                             Span::raw("       "),
-                            Span::styled(artists, Style::default().fg(Theme::MUTED)),
+                            Span::styled(artists, Style::default().fg(Theme::MUTED())),
                         ]),
                     ])
                 })
@@ -212,11 +212,11 @@ impl PlaylistPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                     .title(Span::styled(
                         title,
                         Style::default()
-                            .fg(Theme::ACCENT)
+                            .fg(Theme::ACCENT())
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -296,8 +296,8 @@ impl PlaylistPage {
 
     pub fn mode(&self) -> (String, Color) {
         match self.view {
-            PageView::List => ("PLAYLISTS".into(), Theme::MODE_NORMAL),
-            PageView::Tracks => ("TRACKS".into(), Theme::MODE_NORMAL),
+            PageView::List => ("PLAYLISTS".into(), Theme::MODE_NORMAL()),
+            PageView::Tracks => ("TRACKS".into(), Theme::MODE_NORMAL()),
         }
     }
 
@@ -307,7 +307,7 @@ impl PlaylistPage {
                 let count = self.playlists.len();
                 vec![Span::styled(
                     format!("{count} playlists"),
-                    Style::default().fg(Theme::MUTED),
+                    Style::default().fg(Theme::MUTED()),
                 )]
             }
             PageView::Tracks => {
@@ -321,7 +321,7 @@ impl PlaylistPage {
                     Span::raw("  "),
                     Span::styled(
                         format!("{} tracks", self.tracks.len()),
-                        Style::default().fg(Theme::MUTED),
+                        Style::default().fg(Theme::MUTED()),
                     ),
                 ]
             }

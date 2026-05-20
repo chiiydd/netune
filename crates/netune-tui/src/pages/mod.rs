@@ -71,6 +71,8 @@ pub enum PageAction {
     PlayNext,
     /// Go to the previous track in the queue.
     PlayPrev,
+    /// Switch the color theme.
+    SetTheme(String),
 }
 
 /// Settings page focus fields.

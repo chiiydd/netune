@@ -106,9 +106,9 @@ impl SearchPage {
 
     fn render_input(&self, f: &mut Frame, area: Rect) {
         let border_color = if self.mode == SearchMode::Input {
-            Theme::ACCENT
+            Theme::ACCENT()
         } else {
-            Theme::ACCENT_DIM
+            Theme::ACCENT_DIM()
         };
 
         let block = Block::default()
@@ -118,7 +118,7 @@ impl SearchPage {
             .title(Span::styled(
                 " Search ",
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(Theme::ACCENT())
                     .add_modifier(Modifier::BOLD),
             ));
 
@@ -128,8 +128,8 @@ impl SearchPage {
             ""
         };
         let input = Paragraph::new(Line::from(vec![
-            Span::styled(&self.query, Style::default().fg(Theme::FG)),
-            Span::styled(cursor, Style::default().fg(Theme::ACCENT)),
+            Span::styled(&self.query, Style::default().fg(Theme::FG())),
+            Span::styled(cursor, Style::default().fg(Theme::ACCENT())),
         ]))
         .block(block);
 
@@ -142,17 +142,17 @@ impl SearchPage {
             let msg = format!("{frame} Searching…");
             let items = vec![ListItem::new(Line::from(Span::styled(
                 format!("  {msg}"),
-                Style::default().fg(Theme::ACCENT),
+                Style::default().fg(Theme::ACCENT()),
             )))];
             let list = List::new(items).block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                     .title(Span::styled(
                         " Results ",
                         Style::default()
-                            .fg(Theme::ACCENT)
+                            .fg(Theme::ACCENT())
                             .add_modifier(Modifier::BOLD),
                     )),
             );
@@ -167,7 +167,7 @@ impl SearchPage {
             };
             vec![ListItem::new(Line::from(Span::styled(
                 format!("  {msg}"),
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             )))]
         } else {
             self.results
@@ -188,7 +188,7 @@ impl SearchPage {
                             Span::raw("    "),
                             Span::styled(
                                 format!("{artists} — {}", song.album.name),
-                                Style::default().fg(Theme::MUTED),
+                                Style::default().fg(Theme::MUTED()),
                             ),
                         ]),
                     ])
@@ -201,11 +201,11 @@ impl SearchPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                     .title(Span::styled(
                         " Results ",
                         Style::default()
-                            .fg(Theme::ACCENT)
+                            .fg(Theme::ACCENT())
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -289,8 +289,8 @@ impl SearchPage {
 
     pub fn mode(&self) -> (String, Color) {
         match self.mode {
-            SearchMode::Input => ("INPUT".into(), Theme::MODE_SEARCH),
-            SearchMode::Normal => ("NORMAL".into(), Theme::MODE_NORMAL),
+            SearchMode::Input => ("INPUT".into(), Theme::MODE_SEARCH()),
+            SearchMode::Normal => ("NORMAL".into(), Theme::MODE_NORMAL()),
         }
     }
 
@@ -298,17 +298,17 @@ impl SearchPage {
         if self.query.is_empty() {
             vec![Span::styled(
                 "empty query",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             )]
         } else {
             vec![
-                Span::styled("\"", Style::default().fg(Theme::MUTED)),
+                Span::styled("\"", Style::default().fg(Theme::MUTED())),
                 Span::styled(self.query.clone(), Theme::accent_bold()),
-                Span::styled("\"", Style::default().fg(Theme::MUTED)),
+                Span::styled("\"", Style::default().fg(Theme::MUTED())),
                 Span::raw("  "),
                 Span::styled(
                     format!("{} results", self.results.len()),
-                    Style::default().fg(Theme::MUTED),
+                    Style::default().fg(Theme::MUTED()),
                 ),
             ]
         }

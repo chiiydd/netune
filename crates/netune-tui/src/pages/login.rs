@@ -127,11 +127,11 @@ impl LoginPage {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Theme::ACCENT))
+            .border_style(Style::default().fg(Theme::ACCENT()))
             .title(Span::styled(
                 title,
                 Style::default()
-                    .fg(Theme::ACCENT)
+                    .fg(Theme::ACCENT())
                     .add_modifier(Modifier::BOLD),
             ));
 
@@ -162,16 +162,16 @@ impl LoginPage {
 
         // ── Status text ──────────────────────────────────────────────────
         let (status_text, status_color) = match &self.qr_state {
-            QrLoginState::WaitingForQr => ("正在获取二维码...".to_string(), Theme::WARNING),
-            QrLoginState::WaitingScan => ("请使用网易云音乐 App 扫码".to_string(), Theme::FG),
-            QrLoginState::Scanned => ("已扫码，请在手机上确认".to_string(), Theme::INFO),
-            QrLoginState::Success => ("登录成功!".to_string(), Theme::SUCCESS),
+            QrLoginState::WaitingForQr => ("正在获取二维码...".to_string(), Theme::WARNING()),
+            QrLoginState::WaitingScan => ("请使用网易云音乐 App 扫码".to_string(), Theme::FG()),
+            QrLoginState::Scanned => ("已扫码，请在手机上确认".to_string(), Theme::INFO()),
+            QrLoginState::Success => ("登录成功!".to_string(), Theme::SUCCESS()),
             QrLoginState::Expired => {
                 let msg = self
                     .error
                     .as_deref()
                     .unwrap_or("二维码已过期，按 R 重新获取");
-                (msg.to_string(), Theme::DANGER)
+                (msg.to_string(), Theme::DANGER())
             }
             QrLoginState::BrowserImport => unreachable!(),
         };
@@ -189,7 +189,7 @@ impl LoginPage {
                 f.render_widget(
                     Paragraph::new(Line::from(Span::styled(
                         format!("  ✘ {err}"),
-                        Style::default().fg(Theme::DANGER),
+                        Style::default().fg(Theme::DANGER()),
                     ))),
                     rows[3],
                 );
@@ -214,7 +214,7 @@ impl LoginPage {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  选择浏览器，Enter 确认，Esc 返回",
-                Style::default().fg(Theme::FG),
+                Style::default().fg(Theme::FG()),
             ))),
             rows[1],
         );
@@ -232,10 +232,10 @@ impl LoginPage {
                 };
                 let style = if i == self.selected_browser {
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(Theme::ACCENT())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Theme::MUTED)
+                    Style::default().fg(Theme::MUTED())
                 };
                 ListItem::new(Line::from(Span::styled(
                     format!("{prefix}{display}"),
@@ -251,7 +251,7 @@ impl LoginPage {
             f.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     format!("  ✘ {err}"),
-                    Style::default().fg(Theme::DANGER),
+                    Style::default().fg(Theme::DANGER()),
                 ))),
                 rows[5],
             );
@@ -338,12 +338,12 @@ impl LoginPage {
 
     pub fn mode(&self) -> (String, Color) {
         let color = match self.qr_state {
-            QrLoginState::WaitingForQr => Theme::MODE_LOADING,
-            QrLoginState::WaitingScan => Theme::MODE_NORMAL,
-            QrLoginState::Scanned => Theme::INFO,
-            QrLoginState::Success => Theme::SUCCESS,
-            QrLoginState::Expired => Theme::DANGER,
-            QrLoginState::BrowserImport => Theme::MODE_NORMAL,
+            QrLoginState::WaitingForQr => Theme::MODE_LOADING(),
+            QrLoginState::WaitingScan => Theme::MODE_NORMAL(),
+            QrLoginState::Scanned => Theme::INFO(),
+            QrLoginState::Success => Theme::SUCCESS(),
+            QrLoginState::Expired => Theme::DANGER(),
+            QrLoginState::BrowserImport => Theme::MODE_NORMAL(),
         };
         let label = if self.qr_state == QrLoginState::BrowserImport {
             "IMPORT"
@@ -364,7 +364,7 @@ impl LoginPage {
         };
         vec![Span::styled(
             text.to_string(),
-            Style::default().fg(Theme::MUTED),
+            Style::default().fg(Theme::MUTED()),
         )]
     }
 

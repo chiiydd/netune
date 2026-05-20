@@ -1131,6 +1131,12 @@ impl App {
                 }
             }
 
+            // ── Theme switch ─────────────────────────────────────────────
+            PageAction::SetTheme(name) => {
+                tracing::info!(theme = %name, "Switching theme");
+                crate::theme::Theme::set_theme(&name);
+            }
+
             // ── Cycle play mode ───────────────────────────────────────
             PageAction::CyclePlayMode => {
                 self.play_queue.cycle_mode();

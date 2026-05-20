@@ -160,7 +160,7 @@ impl PlayerPage {
         // separator
         let sep = "─".repeat(area.width as usize);
         f.render_widget(
-            Paragraph::new(Span::styled(sep, Style::default().fg(Theme::ACCENT_DIM))),
+            Paragraph::new(Span::styled(sep, Style::default().fg(Theme::ACCENT_DIM()))),
             chunks[2],
         );
 
@@ -186,7 +186,7 @@ impl PlayerPage {
     ///  ```
     fn render_player(&self, f: &mut Frame, area: Rect) {
         let (title, artists, album) = self.song_info();
-        let bc = Theme::ACCENT_DIM;
+        let bc = Theme::ACCENT_DIM();
         let box_w = 48usize; // inner content width
         let border = format!("╭{}╮", "─".repeat(box_w));
         let bottom_border = format!("╰{}╯", "─".repeat(box_w));
@@ -225,7 +225,7 @@ impl PlayerPage {
             lines.push(self.make_boxed_line("", Style::default(), bc, box_w));
             lines.push(self.make_boxed_line(
                 "No song playing",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
                 bc,
                 box_w,
             ));
@@ -239,10 +239,10 @@ impl PlayerPage {
             let info_texts: [(&str, Style); 3] = [
                 (
                     title.as_str(),
-                    Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
+                    Style::default().fg(Theme::FG()).add_modifier(Modifier::BOLD),
                 ),
-                (artists.as_str(), Style::default().fg(Theme::ACCENT)),
-                (album.as_str(), Style::default().fg(Theme::FG_DIM)),
+                (artists.as_str(), Style::default().fg(Theme::ACCENT())),
+                (album.as_str(), Style::default().fg(Theme::FG_DIM())),
             ];
 
             if self.cover.is_some() {
@@ -282,13 +282,13 @@ impl PlayerPage {
                 let right = pad - left;
                 let prog_line = Line::from(vec![
                     Span::styled(" ".repeat(left), Style::default()),
-                    Span::styled(spinner_text, Style::default().fg(Theme::ACCENT)),
+                    Span::styled(spinner_text, Style::default().fg(Theme::ACCENT())),
                     Span::styled(" ".repeat(right), Style::default()),
                 ]);
                 lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
                 lines.push(self.make_boxed_line(
                     "--:-- / --:--",
-                    Style::default().fg(Theme::FG_DIM),
+                    Style::default().fg(Theme::FG_DIM()),
                     bc,
                     box_w,
                 ));
@@ -304,15 +304,15 @@ impl PlayerPage {
                 let filled_bar: String = "━".repeat(filled.saturating_sub(1));
                 let empty_bar: String = "░".repeat(empty);
                 let prog_line = Line::from(vec![
-                    Span::styled("▶ ", Style::default().fg(Theme::ACCENT)),
-                    Span::styled(filled_bar, Style::default().fg(Theme::ACCENT)),
-                    Span::styled("●", Style::default().fg(Theme::ACCENT)),
-                    Span::styled(empty_bar, Style::default().fg(Theme::MUTED)),
+                    Span::styled("▶ ", Style::default().fg(Theme::ACCENT())),
+                    Span::styled(filled_bar, Style::default().fg(Theme::ACCENT())),
+                    Span::styled("●", Style::default().fg(Theme::ACCENT())),
+                    Span::styled(empty_bar, Style::default().fg(Theme::MUTED())),
                 ]);
                 lines.push(self.make_boxed_line_spans(prog_line, bc, box_w));
                 lines.push(self.make_boxed_line(
                     &time_str,
-                    Style::default().fg(Theme::FG_DIM),
+                    Style::default().fg(Theme::FG_DIM()),
                     bc,
                     box_w,
                 ));
@@ -329,7 +329,7 @@ impl PlayerPage {
             };
             lines.push(self.make_boxed_line(
                 &controls,
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
                 bc,
                 box_w,
             ));
@@ -349,7 +349,7 @@ impl PlayerPage {
             );
             lines.push(self.make_boxed_line(
                 &vol_str,
-                Style::default().fg(Theme::FG_DIM),
+                Style::default().fg(Theme::FG_DIM()),
                 bc,
                 box_w,
             ));
@@ -456,11 +456,11 @@ impl PlayerPage {
         let lines: Vec<Line> = match &self.lyrics {
             None => vec![Line::from(Span::styled(
                 "  Loading lyrics…",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             ))],
             Some(lyrics) if lyrics.lines.is_empty() => vec![Line::from(Span::styled(
                 "  No lyrics available",
-                Style::default().fg(Theme::MUTED),
+                Style::default().fg(Theme::MUTED()),
             ))],
             Some(lyrics) => {
                 let total = lyrics.lines.len();
@@ -480,13 +480,13 @@ impl PlayerPage {
                             Line::from(Span::styled(
                                 format!("▶ {text}"),
                                 Style::default()
-                                    .fg(Theme::ACCENT)
+                                    .fg(Theme::ACCENT())
                                     .add_modifier(Modifier::BOLD),
                             ))
                         } else {
                             Line::from(Span::styled(
                                 format!("  {text}"),
-                                Style::default().fg(Theme::MUTED),
+                                Style::default().fg(Theme::MUTED()),
                             ))
                         }
                     })
@@ -571,9 +571,9 @@ impl PlayerPage {
 
     pub fn mode(&self) -> (String, ratatui::style::Color) {
         if self.is_playing {
-            ("PLAYING".into(), Theme::MODE_PLAYING)
+            ("PLAYING".into(), Theme::MODE_PLAYING())
         } else {
-            ("PAUSED".into(), Theme::MODE_NORMAL)
+            ("PAUSED".into(), Theme::MODE_NORMAL())
         }
     }
 
@@ -588,10 +588,10 @@ impl PlayerPage {
                     .join(", ");
                 vec![
                     Span::styled(song.name.clone(), Theme::accent_bold()),
-                    Span::styled(format!(" — {artists}"), Style::default().fg(Theme::MUTED)),
+                    Span::styled(format!(" — {artists}"), Style::default().fg(Theme::MUTED())),
                 ]
             }
-            None => vec![Span::styled("no song", Style::default().fg(Theme::MUTED))],
+            None => vec![Span::styled("no song", Style::default().fg(Theme::MUTED()))],
         }
     }
 

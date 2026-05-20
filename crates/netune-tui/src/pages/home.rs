@@ -173,25 +173,25 @@ impl HomePage {
                 Span::styled(
                     &user.nickname,
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(Theme::ACCENT())
                         .add_modifier(Modifier::BOLD),
                 ),
             ])];
             if let Some(ref avatar) = user.avatar_url {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(avatar.as_str(), Style::default().fg(Theme::MUTED)),
+                    Span::styled(avatar.as_str(), Style::default().fg(Theme::MUTED())),
                 ]));
             }
 
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                 .title(Span::styled(
                     " User ",
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(Theme::ACCENT())
                         .add_modifier(Modifier::BOLD),
                 ));
             let user_widget = ratatui::widgets::Paragraph::new(lines).block(block);
@@ -211,7 +211,7 @@ impl HomePage {
                     ]),
                     Line::from(vec![
                         Span::raw("    "),
-                        Span::styled(item.desc, Style::default().fg(Theme::MUTED)),
+                        Span::styled(item.desc, Style::default().fg(Theme::MUTED())),
                     ]),
                 ])
             })
@@ -222,11 +222,11 @@ impl HomePage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Theme::ACCENT_DIM))
+                    .border_style(Style::default().fg(Theme::ACCENT_DIM()))
                     .title(Span::styled(
                         " ♫ Main menu ",
                         Style::default()
-                            .fg(Theme::ACCENT)
+                            .fg(Theme::ACCENT())
                             .add_modifier(Modifier::BOLD),
                     )),
             )
@@ -291,7 +291,7 @@ impl HomePage {
     // ── Chrome contract ──────────────────────────────────────────────────────
 
     pub fn mode(&self) -> (String, Color) {
-        ("MENU".into(), Theme::MODE_NORMAL)
+        ("MENU".into(), Theme::MODE_NORMAL())
     }
 
     pub fn context(&self) -> Vec<Span<'static>> {
@@ -303,7 +303,7 @@ impl HomePage {
         vec![Span::styled(
             label.to_owned(),
             Style::default()
-                .fg(Theme::ACCENT)
+                .fg(Theme::ACCENT())
                 .add_modifier(Modifier::BOLD),
         )]
     }
