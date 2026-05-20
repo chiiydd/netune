@@ -165,9 +165,29 @@ impl AudioPlayer for NetunePlayer {
                 return Ok(());
             }
 
-            let mut device_sink = DeviceSinkBuilder::open_default_sink()
-                .map_err(|e| NetuneError::Player(format!("Failed to open audio device: {e}")))?;
-            device_sink.log_on_drop(false);
+            // Retry device open — rapid song switching can leave the device
+            // temporarily unavailable from a previous task's teardown.
+            let mut device_sink = None;
+            for attempt in 1..=3u32 {
+                match DeviceSinkBuilder::open_default_sink() {
+                    Ok(mut ds) => {
+                        ds.log_on_drop(false);
+                        device_sink = Some(ds);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, error = %e, "Failed to open audio device, retrying");
+                        if attempt < 3 {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        } else {
+                            return Err(NetuneError::Player(format!(
+                                "Failed to open audio device after 3 attempts: {e}"
+                            )));
+                        }
+                    }
+                }
+            }
+            let mut device_sink = device_sink.unwrap();
 
             let rodio_player = RodioPlayer::connect_new(device_sink.mixer());
 
