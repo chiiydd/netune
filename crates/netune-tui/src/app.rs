@@ -145,7 +145,7 @@ impl App {
             // ── Cache hit: play instantly, check for cached lyrics/cover ──
             tracing::info!(song_id = song.id, "Playing from audio cache");
             if let Some(ref player) = self.player {
-                if let Err(e) = player.play_from_bytes(bytes) {
+                if let Err(e) = player.play_from_bytes(bytes).await {
                     tracing::warn!(error = %e, "Playback from cache failed");
                     self.set_player_loading(false);
                     return;
@@ -340,7 +340,7 @@ impl App {
                     // Cache to disk for future plays.
                     self.audio_cache.put(result.song_id, &bytes).await;
                     if let Some(ref player) = self.player {
-                        if let Err(e) = player.play_from_bytes(bytes) {
+                        if let Err(e) = player.play_from_bytes(bytes).await {
                             tracing::warn!(error = %e, "Playback from fetched bytes failed");
                             self.set_player_loading(false);
                             return;
